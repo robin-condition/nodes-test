@@ -1,7 +1,7 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
 use egui::{
-    Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Vec2,
+    Color32, CornerRadius, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2,
     emath::TSTransform,
     epaint::{CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
 };
@@ -22,9 +22,8 @@ impl Default for App {
             label: "Hello World!".to_owned(),
             value: 2.7,
             state: UIState {
-                nodes: Vec::new(),
-                lines: Vec::new(),
-                draw_start: None,
+                world: Default::default(),
+                interacting_mode: InteractingMode::Idle,
                 view: TSTransform::IDENTITY,
             },
         }
@@ -140,11 +139,88 @@ struct Node {
     size: egui::Vec2,
 }
 
-struct UIState {
+#[derive(Default)]
+struct NodeWorld {
     nodes: Vec<Node>,
+    // Just for funsies
     lines: Vec<(Pos2, Pos2)>,
-    draw_start: Option<Pos2>,
+}
+
+enum InteractingMode {
+    Idle,
+    // Temp, just for funsies
+    DrawingLine(Pos2),
+    Panning,
+}
+
+struct UIState {
+    world: NodeWorld,
     view: TSTransform,
+    interacting_mode: InteractingMode,
+}
+
+struct DrawingState {
+    lines: Vec<Shape>,
+    other_shapes: Vec<Shape>,
+}
+
+impl UIState {
+    pub fn act(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &mut Response,
+        drawing_state: &mut DrawingState,
+    ) {
+        match &self.interacting_mode {
+            InteractingMode::Idle => {
+                if response.drag_started() {
+                    let ctrl = ui.input(|i| i.modifiers.ctrl);
+                    if let (true, Some(p)) = (ctrl, response.interact_pointer_pos()) {
+                        let worldspace = self.view.inverse() * p;
+                        self.interacting_mode = InteractingMode::DrawingLine(worldspace);
+                        //println!("Drag Started: {worldspace}");
+                    } else {
+                        self.interacting_mode = InteractingMode::Panning;
+                    }
+                }
+            }
+            InteractingMode::DrawingLine(pos2) => {
+                if response.drag_stopped() {
+                    if let Some(end_ui_pos) = response.interact_pointer_pos() {
+                        let end_pos = self.view.inverse() * end_ui_pos;
+
+                        self.world.lines.push((*pos2, end_pos));
+                    }
+                    self.interacting_mode = InteractingMode::Idle;
+                    //println!("Drag stopped!");
+                } else if response.dragged() {
+                    if let Some(end_ui_pos) = response.interact_pointer_pos() {
+                        let end_pos = self.view.inverse() * end_ui_pos;
+
+                        //println!("Drawing from {} to {}", start_pos, end_pos);
+
+                        draw_line(
+                            &mut drawing_state.lines,
+                            *pos2,
+                            end_pos,
+                            100usize,
+                            &self.view,
+                        );
+                    }
+                }
+            }
+            InteractingMode::Panning => {
+                if response.drag_stopped() {
+                    self.interacting_mode = InteractingMode::Idle;
+                }
+                let delt = response.drag_delta();
+                if delt.x != 0f32 || delt.y != 0f32 {
+                    // This happens after view because it's a screen-space transformation.
+                    self.view = TSTransform::from_translation(delt) * self.view;
+                }
+            }
+        }
+    }
 }
 
 fn add_node(ui_state: &mut UIState) {}
@@ -235,33 +311,23 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         let zoom_factor = ui.input(|i| i.zoom_delta());
         if zoom_factor != 1f32 {
             let world_pos = ui_state.view.inverse() * h_pos;
+            //println!("Zooming on {}", world_pos);
 
-            ui_state.view = TSTransform::from_translation(world_pos.to_vec2())
+            // The zoom transformation happens before view because it is a world-space
+            // transformation.
+            ui_state.view = ui_state.view
+                * TSTransform::from_translation(world_pos.to_vec2())
                 * TSTransform::from_scaling(zoom_factor)
-                * TSTransform::from_translation(-world_pos.to_vec2())
-                * ui_state.view;
+                * TSTransform::from_translation(-world_pos.to_vec2());
         }
     }
 
-    if response.drag_started() {
-        if let Some(p) = response.interact_pointer_pos() {
-            let worldspace = ui_state.view.inverse() * p;
-            ui_state.draw_start = Some(worldspace);
-            //println!("Drag Started: {worldspace}");
-        }
-    }
+    let mut draw = DrawingState {
+        lines: vec![],
+        other_shapes: vec![],
+    };
 
-    if response.drag_stopped() {
-        if let (Some(start_pos), Some(end_ui_pos)) =
-            (ui_state.draw_start, response.interact_pointer_pos())
-        {
-            let end_pos = ui_state.view.inverse() * end_ui_pos;
-
-            ui_state.lines.push((start_pos, end_pos));
-        }
-        ui_state.draw_start = None;
-        //println!("Drag stopped!");
-    }
+    ui_state.act(ui, &mut response, &mut draw);
 
     response.context_menu(|ui| {
         ui.label("Add Node");
@@ -272,27 +338,14 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
     let painter = ui.painter_at(rect);
 
-    let mut v = Vec::new();
-
-    if response.dragged() {
-        if let (Some(start_pos), Some(end_ui_pos)) =
-            (ui_state.draw_start, response.interact_pointer_pos())
-        {
-            let end_pos = ui_state.view.inverse() * end_ui_pos;
-
-            //println!("Drawing from {} to {}", start_pos, end_pos);
-
-            draw_line(&mut v, start_pos, end_pos, 100usize, &ui_state.view);
-        }
+    for l in &ui_state.world.lines {
+        draw_line(&mut draw.lines, l.0, l.1, 100, &ui_state.view);
     }
 
-    for l in &ui_state.lines {
-        draw_line(&mut v, l.0, l.1, 100, &ui_state.view);
-    }
+    painter.extend(draw.lines);
+    painter.extend(draw.other_shapes);
 
-    painter.extend(v);
-
-    for n in &ui_state.nodes {
+    for n in &ui_state.world.nodes {
         let r: Shape = RectShape {
             rect: Rect {
                 min: Pos2 {

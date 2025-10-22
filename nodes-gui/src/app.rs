@@ -152,7 +152,8 @@ fn add_node(ui_state: &mut UIState) {
 // f(0)=0, f(1)=1
 // f'(0)=f'(1)=0
 // f''(0)=f''(1)=0
-fn quintic_smooth(t: f32) -> f32 {
+// Then I googled it and found Knuth proposed it apparently
+fn smoother_step(t: f32) -> f32 {
     ((6f32 * t - 15f32) * t + 10f32) * t.powi(3)
 }
 
@@ -161,11 +162,21 @@ fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize)
     let steps = steps + 2;
     let pts: Vec<Pos2> = (0..=steps).into_iter().map(|p| {
         let t = p as f32 / steps as f32;
-        let v = Vec2 {
-            x: t,
-            y: quintic_smooth(t)
+        let smooth_t = smoother_step(t);
+
+        // fancy interpolations I s/like very much :)/SPENT WAY TOO LONG ON
+
+        // for x:
+        let k = if dist.x < 0f32 {
+            -2.6f32 * dist.x
+        } else {
+            1.3 * dist.x
         };
-        start_pt + dist * v
+        let v = Pos2 {
+            x: smooth_t * (dist.x - k) + k * t + start_pt.x,
+            y: smooth_t * dist.y + start_pt.y
+        };
+        v
     }).collect();
 
     let path = 
@@ -209,6 +220,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         if let Some(p) = response.interact_pointer_pos() {
             let worldspace = ui_state.view.inverse() * p;
             ui_state.draw_start = Some(worldspace);
+            //println!("Drag Started: {worldspace}");
         }
     }
 
@@ -216,6 +228,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
     if response.drag_stopped() {
         ui_state.draw_start = None;
+        //println!("Drag stopped!");
     }
 
     response.context_menu(|ui| {
@@ -232,6 +245,8 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     if response.dragged() {
         if let (Some(start_pos), Some(end_ui_pos)) = (ui_state.draw_start, response.interact_pointer_pos()) {
             let end_pos = ui_state.view.inverse() * end_ui_pos;
+
+            //println!("Drawing from {} to {}", start_pos, end_pos);
 
         draw_line(&mut v, start_pos, end_pos, 100usize);
         }

@@ -1,9 +1,13 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
+use std::{collections::HashMap, process::Output};
+
 use egui::{
-    Color32, CornerRadius, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2,
+    Color32, CornerRadius, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2,
     emath::TSTransform,
     epaint::{CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
+    text::Fonts,
+    vec2,
 };
 
 pub struct App {
@@ -109,8 +113,10 @@ fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
     });
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeId(usize);
 
+#[derive(Clone)]
 enum SourceRef {
     Connector(usize),
     OutputPortRef(NodeId, usize),
@@ -121,29 +127,110 @@ struct Connector {
     connection: Option<SourceRef>,
 }
 
+#[derive(Clone)]
 struct InputPort {
-    connection: Option<SourceRef>,
     local_position: egui::Vec2,
     name: String,
 }
 
+#[derive(Clone)]
 struct OutputPort {
     local_position: egui::Vec2,
     name: String,
 }
 
-struct Node {
+// Contains all rendering information for a kind of node.
+#[derive(Clone)]
+struct NodePrototype {
+    name: String,
     inputs: Vec<InputPort>,
     outputs: Vec<OutputPort>,
-    pos: egui::Vec2,
     size: egui::Vec2,
 }
 
-#[derive(Default)]
+struct Node {
+    id: NodeId,
+    connected_inputs: Vec<Option<SourceRef>>,
+
+    // In future, should be Rc or id into list of existing prototypes
+    prototype: NodePrototype,
+
+    pos: egui::Pos2,
+}
+
 struct NodeWorld {
     nodes: Vec<Node>,
+    unused_ids: Vec<NodeId>,
+    next_unallocated_id: NodeId,
+    ids_to_inds: HashMap<NodeId, usize>,
+
     // Just for funsies
     lines: Vec<(Pos2, Pos2)>,
+}
+
+impl Default for NodeWorld {
+    fn default() -> Self {
+        Self {
+            nodes: Default::default(),
+            unused_ids: Default::default(),
+            lines: Default::default(),
+            ids_to_inds: Default::default(),
+            next_unallocated_id: NodeId(0),
+        }
+    }
+}
+
+impl NodeWorld {
+    fn get_next_id(&mut self) -> NodeId {
+        if let Some(id) = self.unused_ids.pop() {
+            return id;
+        }
+
+        let new_id = self.next_unallocated_id;
+        self.next_unallocated_id = NodeId(self.next_unallocated_id.0 + 1);
+        return new_id;
+    }
+
+    pub fn create_node(&mut self, pos: Pos2, prototype: &NodePrototype) -> &Node {
+        let id = self.get_next_id();
+        let new_node = Node {
+            id,
+            connected_inputs: vec![Default::default(); prototype.inputs.len()],
+            prototype: prototype.clone(),
+            pos,
+        };
+        self.nodes.push(new_node);
+        let ind = self.nodes.len() - 1;
+        self.ids_to_inds.insert(id, ind);
+        &self.nodes[ind]
+    }
+
+    pub fn remove_node(&mut self, id: NodeId) {
+        let ind = self.ids_to_inds.remove(&id).unwrap();
+        self.unused_ids.push(id);
+
+        if ind == self.nodes.len() - 1 {
+            self.nodes.pop();
+            return;
+        }
+
+        let node_to_move = self.nodes.pop().unwrap();
+        let id_to_update = node_to_move.id;
+        self.ids_to_inds.insert(id_to_update, ind);
+        self.nodes[ind] = node_to_move;
+    }
+
+    pub fn get_node(&self, id: NodeId) -> &Node {
+        &self.nodes[*self.ids_to_inds.get(&id).unwrap()]
+    }
+
+    pub fn get_mut_node(&mut self, id: NodeId) -> &mut Node {
+        &mut self.nodes[*self.ids_to_inds.get(&id).unwrap()]
+    }
+
+    pub fn node_exists(&self, id: NodeId) -> bool {
+        self.ids_to_inds.contains_key(&id)
+    }
 }
 
 enum InteractingMode {
@@ -282,9 +369,59 @@ fn draw_line(
     lines.push(shape);
 }
 
-fn draw_single_node(shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {}
+fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {
+    let mut r: Shape = RectShape {
+        rect: Rect {
+            min: node.pos,
+            max: node.pos + node.prototype.size,
+        },
+        corner_radius: 10f32.into(),
+        fill: Color32::BLACK,
+        stroke: Stroke::new(3f32, Color32::WHITE),
+        stroke_kind: egui::StrokeKind::Inside,
+        round_to_pixels: None,
+        blur_width: 0f32,
+        brush: None,
+    }
+    .into();
+    r.transform(view);
+
+    let mut name_label: Shape = TextShape::new(
+        node.pos + vec2(20f32, 20f32),
+        painter.layout(
+            node.prototype.name.clone(),
+            FontId::proportional(14f32),
+            Color32::WHITE,
+            node.prototype.size.x,
+        ),
+        Color32::WHITE,
+    )
+    .into();
+    name_label.transform(view);
+    shapes.push(r);
+    shapes.push(name_label);
+}
 
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
+    let add_f32_prototype = NodePrototype {
+        name: "Add Float".to_string(),
+        inputs: vec![
+            InputPort {
+                local_position: egui::vec2(0f32, 50f32),
+                name: "First".to_string(),
+            },
+            InputPort {
+                local_position: egui::Vec2 { x: 0f32, y: 100f32 },
+                name: "Second".to_string(),
+            },
+        ],
+        outputs: vec![OutputPort {
+            local_position: egui::vec2(100f32, 50f32),
+            name: "Out".to_string(),
+        }],
+        size: egui::vec2(100f32, 200f32),
+    };
+
     let size = ui.available_size();
 
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -331,8 +468,10 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
     response.context_menu(|ui| {
         ui.label("Add Node");
-        if ui.button("Constant").clicked() {
-            add_node(ui_state);
+        if ui.button("Add").clicked() {
+            ui_state
+                .world
+                .create_node(ui_state.view * ui.min_rect().min, &add_f32_prototype);
         }
     });
 
@@ -344,30 +483,10 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         draw_line(&mut draw.lines, l.0, l.1, len as usize, &ui_state.view);
     }
 
+    for n in &ui_state.world.nodes {
+        draw_single_node(&painter, &mut draw.other_shapes, n, ui_state.view);
+    }
+
     painter.extend(draw.lines);
     painter.extend(draw.other_shapes);
-
-    for n in &ui_state.world.nodes {
-        let r: Shape = RectShape {
-            rect: Rect {
-                min: Pos2 {
-                    x: n.pos.x,
-                    y: n.pos.y,
-                },
-                max: Pos2 {
-                    x: n.pos.x + n.size.x,
-                    y: n.pos.y + n.size.y,
-                },
-            },
-            corner_radius: 10f32.into(),
-            fill: Color32::BLACK,
-            stroke: Stroke::new(3f32, Color32::WHITE),
-            stroke_kind: egui::StrokeKind::Inside,
-            round_to_pixels: None,
-            blur_width: 0f32,
-            brush: None,
-        }
-        .into();
-        painter.add(r);
-    }
 }

@@ -1,7 +1,9 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
 use egui::{
-    emath::TSTransform, epaint::{CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape}, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Vec2
+    Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Vec2,
+    emath::TSTransform,
+    epaint::{CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
 };
 
 pub struct App {
@@ -145,9 +147,7 @@ struct UIState {
     view: TSTransform,
 }
 
-fn add_node(ui_state: &mut UIState) {
-
-}
+fn add_node(ui_state: &mut UIState) {}
 
 // Derived myself :)
 // From:
@@ -159,30 +159,38 @@ fn smoother_step(t: f32) -> f32 {
     ((6f32 * t - 15f32) * t + 10f32) * t.powi(3)
 }
 
-fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize, view: &TSTransform) {
+fn draw_line(
+    lines: &mut Vec<Shape>,
+    start_pt: Pos2,
+    end_pt: Pos2,
+    steps: usize,
+    view: &TSTransform,
+) {
     let dist = end_pt - start_pt;
     let steps = steps + 2;
-    let pts: Vec<Pos2> = (0..=steps).into_iter().map(|p| {
-        let t = p as f32 / steps as f32;
-        let smooth_t = smoother_step(t);
+    let pts: Vec<Pos2> = (0..=steps)
+        .into_iter()
+        .map(|p| {
+            let t = p as f32 / steps as f32;
+            let smooth_t = smoother_step(t);
 
-        // fancy interpolations I s/like very much :)/SPENT WAY TOO LONG ON
+            // fancy interpolations I s/like very much :)/SPENT WAY TOO LONG ON
 
-        // Handpicked coefficients
-        let k = if dist.x < 0f32 {
-            -2.6f32 * dist.x
-        } else {
-            1.3 * dist.x
-        };
-        let v = Pos2 {
-            x: smooth_t * (dist.x - k) + k * t + start_pt.x,
-            y: smooth_t * dist.y + start_pt.y
-        };
-        v
-    }).collect();
+            // Handpicked coefficients
+            let k = if dist.x < 0f32 {
+                -2.6f32 * dist.x
+            } else {
+                1.3 * dist.x
+            };
+            let v = Pos2 {
+                x: smooth_t * (dist.x - k) + k * t + start_pt.x,
+                y: smooth_t * dist.y + start_pt.y,
+            };
+            v
+        })
+        .collect();
 
-    let path = 
-    PathShape {
+    let path = PathShape {
         points: pts,
         closed: false,
         fill: Color32::TRANSPARENT,
@@ -198,9 +206,7 @@ fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize,
     lines.push(shape);
 }
 
-fn draw_single_node(shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {
-        
-}
+fn draw_single_node(shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {}
 
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     let size = ui.available_size();
@@ -219,6 +225,24 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
             response.mark_changed();
         }
     }*/
+
+    // Zoom!
+    // https://github.com/emilk/egui/discussions/4531
+    if let (true, Some(h_pos)) = (
+        response.contains_pointer(),
+        ui.input(|i| i.pointer.hover_pos()),
+    ) {
+        let zoom_factor = ui.input(|i| i.zoom_delta());
+        if zoom_factor != 1f32 {
+            let world_pos = ui_state.view.inverse() * h_pos;
+
+            ui_state.view = TSTransform::from_translation(world_pos.to_vec2())
+                * TSTransform::from_scaling(zoom_factor)
+                * TSTransform::from_translation(-world_pos.to_vec2())
+                * ui_state.view;
+        }
+    }
+
     if response.drag_started() {
         if let Some(p) = response.interact_pointer_pos() {
             let worldspace = ui_state.view.inverse() * p;
@@ -227,14 +251,13 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         }
     }
 
-    
-
     if response.drag_stopped() {
-        if let (Some(start_pos), Some(end_ui_pos)) = (ui_state.draw_start, response.interact_pointer_pos()) {
+        if let (Some(start_pos), Some(end_ui_pos)) =
+            (ui_state.draw_start, response.interact_pointer_pos())
+        {
             let end_pos = ui_state.view.inverse() * end_ui_pos;
-            
-            ui_state.lines.push((start_pos, end_pos));
 
+            ui_state.lines.push((start_pos, end_pos));
         }
         ui_state.draw_start = None;
         //println!("Drag stopped!");
@@ -252,19 +275,21 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     let mut v = Vec::new();
 
     if response.dragged() {
-        if let (Some(start_pos), Some(end_ui_pos)) = (ui_state.draw_start, response.interact_pointer_pos()) {
+        if let (Some(start_pos), Some(end_ui_pos)) =
+            (ui_state.draw_start, response.interact_pointer_pos())
+        {
             let end_pos = ui_state.view.inverse() * end_ui_pos;
 
             //println!("Drawing from {} to {}", start_pos, end_pos);
 
-        draw_line(&mut v, start_pos, end_pos, 100usize, &ui_state.view);
+            draw_line(&mut v, start_pos, end_pos, 100usize, &ui_state.view);
         }
     }
 
     for l in &ui_state.lines {
         draw_line(&mut v, l.0, l.1, 100, &ui_state.view);
     }
-    
+
     painter.extend(v);
 
     for n in &ui_state.nodes {

@@ -21,6 +21,7 @@ impl Default for App {
             value: 2.7,
             state: UIState {
                 nodes: Vec::new(),
+                lines: Vec::new(),
                 draw_start: None,
                 view: TSTransform::IDENTITY,
             },
@@ -139,6 +140,7 @@ struct Node {
 
 struct UIState {
     nodes: Vec<Node>,
+    lines: Vec<(Pos2, Pos2)>,
     draw_start: Option<Pos2>,
     view: TSTransform,
 }
@@ -157,7 +159,7 @@ fn smoother_step(t: f32) -> f32 {
     ((6f32 * t - 15f32) * t + 10f32) * t.powi(3)
 }
 
-fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize) {
+fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize, view: &TSTransform) {
     let dist = end_pt - start_pt;
     let steps = steps + 2;
     let pts: Vec<Pos2> = (0..=steps).into_iter().map(|p| {
@@ -191,11 +193,12 @@ fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize)
         },
     };
 
-    lines.push(Shape::Path(path));
+    let mut shape = Shape::Path(path);
+    shape.transform(*view);
+    lines.push(shape);
 }
 
 fn draw_single_node(shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {
-
         
 }
 
@@ -227,6 +230,12 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     
 
     if response.drag_stopped() {
+        if let (Some(start_pos), Some(end_ui_pos)) = (ui_state.draw_start, response.interact_pointer_pos()) {
+            let end_pos = ui_state.view.inverse() * end_ui_pos;
+            
+            ui_state.lines.push((start_pos, end_pos));
+
+        }
         ui_state.draw_start = None;
         //println!("Drag stopped!");
     }
@@ -248,8 +257,12 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
             //println!("Drawing from {} to {}", start_pos, end_pos);
 
-        draw_line(&mut v, start_pos, end_pos, 100usize);
+        draw_line(&mut v, start_pos, end_pos, 100usize, &ui_state.view);
         }
+    }
+
+    for l in &ui_state.lines {
+        draw_line(&mut v, l.0, l.1, 100, &ui_state.view);
     }
     
     painter.extend(v);

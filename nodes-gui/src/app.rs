@@ -166,7 +166,7 @@ fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize)
 
         // fancy interpolations I s/like very much :)/SPENT WAY TOO LONG ON
 
-        // for x:
+        // Handpicked coefficients
         let k = if dist.x < 0f32 {
             -2.6f32 * dist.x
         } else {

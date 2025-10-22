@@ -339,7 +339,9 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     let painter = ui.painter_at(rect);
 
     for l in &ui_state.world.lines {
-        draw_line(&mut draw.lines, l.0, l.1, 100, &ui_state.view);
+        let diff = (l.1 - l.0) * ui_state.view.scaling;
+        let len = (diff.length() / 10f32).max(1f32).min(100f32);
+        draw_line(&mut draw.lines, l.0, l.1, len as usize, &ui_state.view);
     }
 
     painter.extend(draw.lines);

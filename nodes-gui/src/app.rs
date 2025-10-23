@@ -239,6 +239,7 @@ enum InteractingMode {
     // Temp, just for funsies
     DrawingLine(Pos2),
     Panning,
+    Moving(Pos2, NodeId),
 }
 
 struct UIState {
@@ -253,6 +254,16 @@ struct DrawingState {
 }
 
 impl UIState {
+    fn selected_node(&self, pos: Pos2) -> Option<&Node> {
+        for n in &self.world.nodes {
+            let rect = Rect::from_min_size(n.pos, n.prototype.size);
+            if rect.contains(pos) {
+                return Some(n);
+            }
+        }
+        None
+    }
+
     pub fn act(
         &mut self,
         ui: &mut egui::Ui,
@@ -261,14 +272,20 @@ impl UIState {
     ) {
         match &self.interacting_mode {
             InteractingMode::Idle => {
-                if response.drag_started() {
+                if let (true, Some(p)) = (response.drag_started(), response.interact_pointer_pos())
+                {
                     let ctrl = ui.input(|i| i.modifiers.ctrl);
-                    if let (true, Some(p)) = (ctrl, response.interact_pointer_pos()) {
-                        let worldspace = self.view.inverse() * p;
+                    let worldspace = self.view.inverse() * p;
+                    if ctrl {
                         self.interacting_mode = InteractingMode::DrawingLine(worldspace);
                         //println!("Drag Started: {worldspace}");
                     } else {
-                        self.interacting_mode = InteractingMode::Panning;
+                        if let Some(node_to_drag) = self.selected_node(worldspace) {
+                            self.interacting_mode =
+                                InteractingMode::Moving(worldspace, node_to_drag.id);
+                        } else {
+                            self.interacting_mode = InteractingMode::Panning;
+                        }
                     }
                 }
             }
@@ -305,6 +322,19 @@ impl UIState {
                 if delt.x != 0f32 || delt.y != 0f32 {
                     // This happens after view because it's a screen-space transformation.
                     self.view = TSTransform::from_translation(delt) * self.view;
+                }
+            }
+            InteractingMode::Moving(pos, node) => {
+                if response.drag_stopped() {
+                    self.interacting_mode = InteractingMode::Idle;
+                } else if let (true, Some(p_pos)) =
+                    (response.contains_pointer(), response.interact_pointer_pos())
+                {
+                    let world_pos = self.view.inverse() * p_pos;
+                    let diff = world_pos - *pos;
+
+                    self.world.get_mut_node(*node).pos += diff;
+                    self.interacting_mode = InteractingMode::Moving(world_pos, *node);
                 }
             }
         }

@@ -5,7 +5,7 @@ use std::{collections::HashMap, process::Output};
 use egui::{
     Color32, CornerRadius, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2,
     emath::TSTransform,
-    epaint::{CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
+    epaint::{CircleShape, CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
     text::Fonts,
     vec2,
 };
@@ -387,19 +387,31 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
     r.transform(view);
 
     let mut name_label: Shape = TextShape::new(
-        node.pos + vec2(20f32, 20f32),
+        view * (node.pos + vec2(20f32, 20f32)),
         painter.layout(
             node.prototype.name.clone(),
-            FontId::proportional(14f32),
+            FontId::proportional(14f32 * view.scaling),
             Color32::WHITE,
-            node.prototype.size.x,
+            node.prototype.size.x * view.scaling,
         ),
         Color32::WHITE,
     )
     .into();
-    name_label.transform(view);
+    //name_label.translate(view.translation);
     shapes.push(r);
     shapes.push(name_label);
+
+    for inp in &node.prototype.inputs {
+        let mut circle: Shape = CircleShape {
+            center: node.pos + inp.local_position,
+            radius: 5f32,
+            fill: Color32::RED,
+            stroke: Stroke::NONE,
+        }
+        .into();
+        circle.transform(view);
+        shapes.push(circle);
+    }
 }
 
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
@@ -445,13 +457,22 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         response.contains_pointer(),
         ui.input(|i| i.pointer.hover_pos()),
     ) {
-        let zoom_factor = ui.input(|i| i.zoom_delta());
+        let mut zoom_factor = ui.input(|i| i.zoom_delta());
         if zoom_factor != 1f32 {
+            let max_scaling = 5.0f32;
+
+            let resulting_zoom = ui_state.view.scaling * zoom_factor;
+
+            if resulting_zoom > max_scaling {
+                zoom_factor = max_scaling / ui_state.view.scaling;
+            }
+
             let world_pos = ui_state.view.inverse() * h_pos;
             //println!("Zooming on {}", world_pos);
 
             // The zoom transformation happens before view because it is a world-space
             // transformation.
+
             ui_state.view = ui_state.view
                 * TSTransform::from_translation(world_pos.to_vec2())
                 * TSTransform::from_scaling(zoom_factor)
@@ -469,9 +490,10 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     response.context_menu(|ui| {
         ui.label("Add Node");
         if ui.button("Add").clicked() {
-            ui_state
-                .world
-                .create_node(ui_state.view * ui.min_rect().min, &add_f32_prototype);
+            ui_state.world.create_node(
+                ui_state.view.inverse() * ui.min_rect().min,
+                &add_f32_prototype,
+            );
         }
     });
 

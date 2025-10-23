@@ -3,10 +3,11 @@
 use std::{collections::HashMap, process::Output};
 
 use egui::{
-    Color32, CornerRadius, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2,
+    Align, Color32, CornerRadius, FontId, Layout, Painter, Pos2, Rect, Response, Sense, Shape,
+    Stroke, Vec2,
     emath::TSTransform,
     epaint::{CircleShape, CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
-    text::Fonts,
+    text::{Fonts, LayoutJob},
     vec2,
 };
 
@@ -369,6 +370,60 @@ fn draw_line(
     lines.push(shape);
 }
 
+fn draw_text(
+    painter: &Painter,
+    text: String,
+    pos: Pos2,
+    font_size: f32,
+    halign: Align,
+    valign: Align,
+    view: TSTransform,
+) -> TextShape {
+    let mut job = LayoutJob::simple_singleline(
+        text,
+        FontId::proportional(font_size * view.scaling),
+        Color32::WHITE,
+    );
+    job.halign = halign;
+    let galley = painter.layout_job(job);
+    let rect = galley.rect;
+    TextShape::new(
+        view * pos - vec2(0f32, rect.bottom() * valign.to_factor()),
+        galley,
+        Color32::WHITE,
+    )
+}
+
+fn draw_port(
+    shapes: &mut Vec<Shape>,
+    painter: &Painter,
+    text: String,
+    pos: Pos2,
+    node_side: Align,
+    view: TSTransform,
+) {
+    let mut circle: Shape = CircleShape {
+        center: pos,
+        radius: 5f32,
+        fill: Color32::RED,
+        stroke: Stroke::NONE,
+    }
+    .into();
+    circle.transform(view);
+    shapes.push(circle);
+
+    let text_view = draw_text(
+        painter,
+        text,
+        pos + vec2(10f32, 0f32) - node_side.to_factor() * vec2(20f32, 0f32),
+        10f32,
+        node_side,
+        Align::Center,
+        view,
+    );
+    shapes.push(text_view.into());
+}
+
 fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {
     let mut r: Shape = RectShape {
         rect: Rect {
@@ -378,7 +433,7 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
         corner_radius: 10f32.into(),
         fill: Color32::BLACK,
         stroke: Stroke::new(3f32, Color32::WHITE),
-        stroke_kind: egui::StrokeKind::Inside,
+        stroke_kind: egui::StrokeKind::Middle,
         round_to_pixels: None,
         blur_width: 0f32,
         brush: None,
@@ -386,15 +441,14 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
     .into();
     r.transform(view);
 
-    let mut name_label: Shape = TextShape::new(
-        view * (node.pos + vec2(20f32, 20f32)),
-        painter.layout(
-            node.prototype.name.clone(),
-            FontId::proportional(14f32 * view.scaling),
-            Color32::WHITE,
-            node.prototype.size.x * view.scaling,
-        ),
-        Color32::WHITE,
+    let name_label = draw_text(
+        painter,
+        node.prototype.name.clone(),
+        node.pos + vec2(20f32, 20f32),
+        14f32,
+        Align::LEFT,
+        Align::TOP,
+        view,
     )
     .into();
     //name_label.translate(view.translation);
@@ -402,15 +456,25 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
     shapes.push(name_label);
 
     for inp in &node.prototype.inputs {
-        let mut circle: Shape = CircleShape {
-            center: node.pos + inp.local_position,
-            radius: 5f32,
-            fill: Color32::RED,
-            stroke: Stroke::NONE,
-        }
-        .into();
-        circle.transform(view);
-        shapes.push(circle);
+        draw_port(
+            shapes,
+            painter,
+            inp.name.clone(),
+            node.pos + inp.local_position,
+            Align::LEFT,
+            view,
+        );
+    }
+
+    for outp in &node.prototype.outputs {
+        draw_port(
+            shapes,
+            painter,
+            outp.name.clone(),
+            node.pos + outp.local_position,
+            Align::RIGHT,
+            view,
+        );
     }
 }
 

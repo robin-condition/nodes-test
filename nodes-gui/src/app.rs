@@ -1,13 +1,12 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
-use std::{collections::HashMap, process::Output};
+use std::collections::HashMap;
 
 use egui::{
-    Align, Color32, CornerRadius, FontId, Layout, Painter, Pos2, Rect, Response, Sense, Shape,
-    Stroke, Vec2,
+    Align, Color32, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
     emath::TSTransform,
-    epaint::{CircleShape, CornerRadiusF32, PathShape, PathStroke, RectShape, TextShape},
-    text::{Fonts, LayoutJob},
+    epaint::{CircleShape, PathShape, PathStroke, RectShape, TextShape},
+    text::LayoutJob,
     vec2,
 };
 
@@ -30,6 +29,7 @@ impl Default for App {
                 world: Default::default(),
                 interacting_mode: InteractingMode::Idle,
                 view: TSTransform::IDENTITY,
+                selection: Default::default(),
             },
         }
     }
@@ -37,7 +37,7 @@ impl Default for App {
 
 impl App {
     /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // This is also where you can customize the look and feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
         Default::default()
@@ -246,6 +246,14 @@ struct UIState {
     world: NodeWorld,
     view: TSTransform,
     interacting_mode: InteractingMode,
+    selection: SelectionState,
+}
+
+#[derive(Default)]
+struct SelectionState {
+    selected_nodes: Vec<NodeId>,
+    hovered_input_port: Option<(NodeId, usize)>,
+    hovered_output_port: Option<(NodeId, usize)>,
 }
 
 struct DrawingState {
@@ -264,27 +272,82 @@ impl UIState {
         None
     }
 
+    fn selected_input_port(&self, pos: Pos2) -> Option<(NodeId, usize)> {
+        for n in &self.world.nodes {
+            for i in n.prototype.inputs.iter().enumerate() {
+                let p_pos = n.pos + i.1.local_position;
+                let dist_square = (p_pos - pos).length_sq();
+                if dist_square < 100f32 {
+                    return Some((n.id, i.0));
+                }
+            }
+        }
+        None
+    }
+
+    fn selected_output_port(&self, pos: Pos2) -> Option<(NodeId, usize)> {
+        for n in &self.world.nodes {
+            for i in n.prototype.outputs.iter().enumerate() {
+                let p_pos = n.pos + i.1.local_position;
+                let dist_square = (p_pos - pos).length_sq();
+                if dist_square < 100f32 {
+                    return Some((n.id, i.0));
+                }
+            }
+        }
+        None
+    }
+
     pub fn act(
         &mut self,
         ui: &mut egui::Ui,
         response: &mut Response,
         drawing_state: &mut DrawingState,
     ) {
+        self.selection.hovered_input_port = None;
+        self.selection.hovered_output_port = None;
         match &self.interacting_mode {
             InteractingMode::Idle => {
-                if let (true, Some(p)) = (response.drag_started(), response.interact_pointer_pos())
+                if let Some(p) = response
+                    .hover_pos()
+                    .or_else(|| response.interact_pointer_pos())
                 {
                     let ctrl = ui.input(|i| i.modifiers.ctrl);
                     let worldspace = self.view.inverse() * p;
-                    if ctrl {
-                        self.interacting_mode = InteractingMode::DrawingLine(worldspace);
-                        //println!("Drag Started: {worldspace}");
-                    } else {
-                        if let Some(node_to_drag) = self.selected_node(worldspace) {
-                            self.interacting_mode =
-                                InteractingMode::Moving(worldspace, node_to_drag.id);
+
+                    let input_port_selected = self.selected_input_port(worldspace);
+                    self.selection.hovered_input_port = input_port_selected;
+
+                    let output_port_selected = self.selected_output_port(worldspace);
+                    self.selection.hovered_output_port = output_port_selected;
+
+                    if let (true, Some(port)) =
+                        (response.is_pointer_button_down_on(), input_port_selected)
+                    {
+                        self.interacting_mode = InteractingMode::DrawingLine(
+                            self.world.get_node(port.0).pos
+                                + self.world.get_node(port.0).prototype.inputs[port.1]
+                                    .local_position,
+                        );
+                    } else if let (true, Some(port)) =
+                        (response.is_pointer_button_down_on(), output_port_selected)
+                    {
+                        self.interacting_mode = InteractingMode::DrawingLine(
+                            self.world.get_node(port.0).pos
+                                + self.world.get_node(port.0).prototype.outputs[port.1]
+                                    .local_position,
+                        );
+                    } else if response.drag_started() {
+                        if ctrl {
+                            self.interacting_mode = InteractingMode::DrawingLine(worldspace);
+                            //println!("Drag Started: {worldspace}");
                         } else {
-                            self.interacting_mode = InteractingMode::Panning;
+                            if let Some(node_to_drag) = self.selected_node(worldspace) {
+                                self.interacting_mode =
+                                    InteractingMode::Moving(worldspace, node_to_drag.id);
+                            } else {
+                                self.interacting_mode = InteractingMode::Panning;
+                            }
                         }
                     }
                 }
@@ -325,6 +388,7 @@ impl UIState {
                 }
             }
             InteractingMode::Moving(pos, node) => {
+                self.selection.selected_nodes = vec![*node];
                 if response.drag_stopped() {
                     self.interacting_mode = InteractingMode::Idle;
                 } else if let (true, Some(p_pos)) =
@@ -431,11 +495,12 @@ fn draw_port(
     pos: Pos2,
     node_side: Align,
     view: TSTransform,
+    color: Color32,
 ) {
     let mut circle: Shape = CircleShape {
         center: pos,
         radius: 5f32,
-        fill: Color32::RED,
+        fill: color,
         stroke: Stroke::NONE,
     }
     .into();
@@ -454,7 +519,13 @@ fn draw_port(
     shapes.push(text_view.into());
 }
 
-fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, view: TSTransform) {
+fn draw_single_node(
+    painter: &Painter,
+    shapes: &mut Vec<Shape>,
+    node: &Node,
+    view: TSTransform,
+    select_state: &SelectionState,
+) {
     let mut r: Shape = RectShape {
         rect: Rect {
             min: node.pos,
@@ -485,7 +556,7 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
     shapes.push(r);
     shapes.push(name_label);
 
-    for inp in &node.prototype.inputs {
+    for (ind, inp) in node.prototype.inputs.iter().enumerate() {
         draw_port(
             shapes,
             painter,
@@ -493,10 +564,15 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
             node.pos + inp.local_position,
             Align::LEFT,
             view,
+            if select_state.hovered_input_port == Some((node.id, ind)) {
+                Color32::WHITE
+            } else {
+                Color32::RED
+            },
         );
     }
 
-    for outp in &node.prototype.outputs {
+    for (ind, outp) in node.prototype.outputs.iter().enumerate() {
         draw_port(
             shapes,
             painter,
@@ -504,6 +580,11 @@ fn draw_single_node(painter: &Painter, shapes: &mut Vec<Shape>, node: &Node, vie
             node.pos + outp.local_position,
             Align::RIGHT,
             view,
+            if select_state.hovered_output_port == Some((node.id, ind)) {
+                Color32::WHITE
+            } else {
+                Color32::RED
+            },
         );
     }
 }
@@ -600,7 +681,13 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     }
 
     for n in &ui_state.world.nodes {
-        draw_single_node(&painter, &mut draw.other_shapes, n, ui_state.view);
+        draw_single_node(
+            &painter,
+            &mut draw.other_shapes,
+            n,
+            ui_state.view,
+            &ui_state.selection,
+        );
     }
 
     painter.extend(draw.lines);

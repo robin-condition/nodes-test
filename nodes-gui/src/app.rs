@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use egui::{
-    Align, Color32, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
+    Align, Area, Color32, FontId, Label, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
+    Widget,
     emath::TSTransform,
     epaint::{CircleShape, PathShape, PathStroke, RectShape, TextShape},
     text::LayoutJob,
@@ -116,6 +117,12 @@ fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeId(usize);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct InputPortId(NodeId, usize);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct OutputPortId(NodeId, usize);
 
 #[derive(Clone)]
 enum SourceRef {
@@ -234,10 +241,18 @@ impl NodeWorld {
     }
 }
 
+enum DrawingConnection {
+    FromInput(InputPortId),
+    FromOutput(OutputPortId),
+}
+
 enum InteractingMode {
     Idle,
     // Temp, just for funsies
     DrawingLine(Pos2),
+
+    DrawingConnection(DrawingConnection),
+
     Panning,
     Moving(Pos2, NodeId),
 }
@@ -252,8 +267,8 @@ struct UIState {
 #[derive(Default)]
 struct SelectionState {
     selected_nodes: Vec<NodeId>,
-    hovered_input_port: Option<(NodeId, usize)>,
-    hovered_output_port: Option<(NodeId, usize)>,
+    hovered_input_port: Option<InputPortId>,
+    hovered_output_port: Option<OutputPortId>,
 }
 
 struct DrawingState {
@@ -272,26 +287,26 @@ impl UIState {
         None
     }
 
-    fn selected_input_port(&self, pos: Pos2) -> Option<(NodeId, usize)> {
+    fn selected_input_port(&self, pos: Pos2) -> Option<InputPortId> {
         for n in &self.world.nodes {
             for i in n.prototype.inputs.iter().enumerate() {
                 let p_pos = n.pos + i.1.local_position;
                 let dist_square = (p_pos - pos).length_sq();
                 if dist_square < 100f32 {
-                    return Some((n.id, i.0));
+                    return Some(InputPortId(n.id, i.0));
                 }
             }
         }
         None
     }
 
-    fn selected_output_port(&self, pos: Pos2) -> Option<(NodeId, usize)> {
+    fn selected_output_port(&self, pos: Pos2) -> Option<OutputPortId> {
         for n in &self.world.nodes {
             for i in n.prototype.outputs.iter().enumerate() {
                 let p_pos = n.pos + i.1.local_position;
                 let dist_square = (p_pos - pos).length_sq();
                 if dist_square < 100f32 {
-                    return Some((n.id, i.0));
+                    return Some(OutputPortId(n.id, i.0));
                 }
             }
         }
@@ -324,30 +339,19 @@ impl UIState {
                     if let (true, Some(port)) =
                         (response.is_pointer_button_down_on(), input_port_selected)
                     {
-                        self.interacting_mode = InteractingMode::DrawingLine(
-                            self.world.get_node(port.0).pos
-                                + self.world.get_node(port.0).prototype.inputs[port.1]
-                                    .local_position,
-                        );
+                        self.interacting_mode =
+                            InteractingMode::DrawingConnection(DrawingConnection::FromInput(port));
                     } else if let (true, Some(port)) =
                         (response.is_pointer_button_down_on(), output_port_selected)
                     {
-                        self.interacting_mode = InteractingMode::DrawingLine(
-                            self.world.get_node(port.0).pos
-                                + self.world.get_node(port.0).prototype.outputs[port.1]
-                                    .local_position,
-                        );
+                        self.interacting_mode =
+                            InteractingMode::DrawingConnection(DrawingConnection::FromOutput(port));
                     } else if response.drag_started() {
-                        if ctrl {
-                            self.interacting_mode = InteractingMode::DrawingLine(worldspace);
-                            //println!("Drag Started: {worldspace}");
+                        if let Some(node_to_drag) = self.selected_node(worldspace) {
+                            self.interacting_mode =
+                                InteractingMode::Moving(worldspace, node_to_drag.id);
                         } else {
-                            if let Some(node_to_drag) = self.selected_node(worldspace) {
-                                self.interacting_mode =
-                                    InteractingMode::Moving(worldspace, node_to_drag.id);
-                            } else {
-                                self.interacting_mode = InteractingMode::Panning;
-                            }
+                            self.interacting_mode = InteractingMode::Panning;
                         }
                     }
                 }
@@ -399,6 +403,72 @@ impl UIState {
 
                     self.world.get_mut_node(*node).pos += diff;
                     self.interacting_mode = InteractingMode::Moving(world_pos, *node);
+                }
+            }
+            InteractingMode::DrawingConnection(DrawingConnection::FromInput(inp)) => {
+                if response.drag_stopped() {
+                    self.interacting_mode = InteractingMode::Idle;
+                } else if let (true, Some(p_pos)) =
+                    (response.contains_pointer(), response.interact_pointer_pos())
+                {
+                    let pos = self.view.inverse() * p_pos;
+                    self.selection.hovered_output_port = self.selected_output_port(pos);
+                    if let Some(outp_port) = self.selection.hovered_output_port {
+                        if outp_port.0 == inp.0 {
+                            self.selection.hovered_output_port = None;
+                        }
+                    }
+
+                    let start_point = if let Some(outp_port) = self.selection.hovered_output_port {
+                        let n = self.world.get_node(outp_port.0);
+                        n.pos + n.prototype.outputs[outp_port.1].local_position
+                    } else {
+                        pos
+                    };
+
+                    let dest_point = self.world.get_node(inp.0).pos
+                        + self.world.get_node(inp.0).prototype.inputs[inp.1].local_position;
+
+                    draw_line(
+                        &mut drawing_state.lines,
+                        start_point,
+                        dest_point,
+                        100usize,
+                        &self.view,
+                    );
+                }
+            }
+            InteractingMode::DrawingConnection(DrawingConnection::FromOutput(outp)) => {
+                if response.drag_stopped() {
+                    self.interacting_mode = InteractingMode::Idle;
+                } else if let (true, Some(p_pos)) =
+                    (response.contains_pointer(), response.interact_pointer_pos())
+                {
+                    let pos = self.view.inverse() * p_pos;
+                    self.selection.hovered_input_port = self.selected_input_port(pos);
+                    if let Some(inp_port) = self.selection.hovered_input_port {
+                        if inp_port.0 == outp.0 {
+                            self.selection.hovered_input_port = None;
+                        }
+                    }
+
+                    let dest_point = if let Some(inp_port) = self.selection.hovered_input_port {
+                        let n = self.world.get_node(inp_port.0);
+                        n.pos + n.prototype.inputs[inp_port.1].local_position
+                    } else {
+                        pos
+                    };
+
+                    let start_point = self.world.get_node(outp.0).pos
+                        + self.world.get_node(outp.0).prototype.outputs[outp.1].local_position;
+
+                    draw_line(
+                        &mut drawing_state.lines,
+                        start_point,
+                        dest_point,
+                        100usize,
+                        &self.view,
+                    );
                 }
             }
         }
@@ -564,7 +634,7 @@ fn draw_single_node(
             node.pos + inp.local_position,
             Align::LEFT,
             view,
-            if select_state.hovered_input_port == Some((node.id, ind)) {
+            if select_state.hovered_input_port == Some(InputPortId(node.id, ind)) {
                 Color32::WHITE
             } else {
                 Color32::RED
@@ -580,7 +650,7 @@ fn draw_single_node(
             node.pos + outp.local_position,
             Align::RIGHT,
             view,
-            if select_state.hovered_output_port == Some((node.id, ind)) {
+            if select_state.hovered_output_port == Some(OutputPortId(node.id, ind)) {
                 Color32::WHITE
             } else {
                 Color32::RED
@@ -690,6 +760,6 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         );
     }
 
-    painter.extend(draw.lines);
     painter.extend(draw.other_shapes);
+    painter.extend(draw.lines);
 }

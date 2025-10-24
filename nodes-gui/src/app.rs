@@ -3,17 +3,21 @@
 use std::collections::HashMap;
 
 use egui::{
-    Align, Area, Color32, FontId, Label, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
-    Widget,
+    Align, Area, Color32, FontId, Label, LayerId, Painter, Pos2, Rect, Response, Sense, Shape,
+    Stroke, Widget,
     emath::TSTransform,
     epaint::{CircleShape, PathShape, PathStroke, RectShape, TextShape},
     text::LayoutJob,
     vec2,
 };
 
+pub mod editor_graph;
 pub mod storage;
+use editor_graph::{Node, NodePrototype, Port, PortKind, PortKindPrototype, PortPrototype};
 
 use storage::*;
+
+use crate::app::editor_graph::{NodeState, NodeWorld};
 
 pub struct App {
     // Example stuff:
@@ -117,130 +121,6 @@ fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
         );
         ui.label(".");
     });
-}
-
-#[derive(Clone)]
-enum SourceRef {
-    OutputPortRef(ID),
-}
-
-struct Connector {
-    pos: egui::Vec2,
-    connection: Option<SourceRef>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-enum PortKindPrototype {
-    Input,
-    Output,
-}
-
-impl PortKindPrototype {
-    fn instantiate(&self) -> PortKind {
-        match self {
-            PortKindPrototype::Input => PortKind::Input(None),
-            PortKindPrototype::Output => PortKind::Output,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-enum PortKind {
-    Input(Option<ID>),
-    Output,
-}
-
-impl PortKind {
-    pub fn is_input(&self) -> bool {
-        match self {
-            PortKind::Input(_) => true,
-            PortKind::Output => false,
-        }
-    }
-
-    pub fn is_output(&self) -> bool {
-        !self.is_input()
-    }
-}
-
-#[derive(Clone)]
-pub struct Port {
-    port_info: PortPrototype,
-    node: ID,
-    connection_kind: PortKind,
-}
-
-#[derive(Clone)]
-struct PortPrototype {
-    local_position: egui::Vec2,
-    name: String,
-    kind: PortKindPrototype,
-}
-
-// Contains all rendering information for a kind of node.
-#[derive(Clone)]
-pub struct NodePrototype {
-    name: String,
-    ports: Vec<PortPrototype>,
-    size: egui::Vec2,
-}
-
-pub struct Node {
-    ports: Vec<ID>,
-
-    // In future, should be Rc or id into list of existing prototypes
-    prototype: NodePrototype,
-
-    pos: egui::Pos2,
-}
-
-pub struct NodeWorld {
-    pub nodes: Storage<Node>,
-    pub ports: Storage<Port>,
-}
-
-impl Default for NodeWorld {
-    fn default() -> Self {
-        Self {
-            nodes: Storage::default(),
-            ports: Storage::default(),
-        }
-    }
-}
-
-impl NodeWorld {
-    pub fn get_port_pos(&self, id: ID) -> Pos2 {
-        self.get_port_pos_from_ref(self.ports.get(id))
-    }
-
-    pub fn get_port_pos_from_ref(&self, port: &Port) -> Pos2 {
-        self.nodes.get(port.node).pos + port.port_info.local_position
-    }
-
-    fn create_port_and_link(&mut self, node_id: ID, port_proto: &PortPrototype) -> ID {
-        let new_port = self.ports.create(Port {
-            port_info: port_proto.clone(),
-            node: node_id,
-            connection_kind: port_proto.kind.instantiate(),
-        });
-        new_port.1
-    }
-
-    pub fn create_node(&mut self, pos: Pos2, prototype: &NodePrototype) {
-        let new_obj = self
-            .nodes
-            .create(Node {
-                ports: Vec::new(),
-                prototype: prototype.clone(),
-                pos,
-            })
-            .1;
-
-        for p in &prototype.ports {
-            let new_p = self.create_port_and_link(new_obj, p);
-            self.nodes.get_mut(new_obj).ports.push(new_p);
-        }
-    }
 }
 
 enum DrawingConnection {
@@ -371,7 +251,7 @@ impl UIState {
                         self.interacting_mode = InteractingMode::DrawingConnection(
                             match self.world.ports.get(port).connection_kind {
                                 PortKind::Input(_) => DrawingConnection::FromInput(port),
-                                PortKind::Output => DrawingConnection::FromOutput(port),
+                                PortKind::Output(_) => DrawingConnection::FromOutput(port),
                             },
                         );
                     } else if response.drag_started() {
@@ -462,8 +342,6 @@ impl UIState {
         }
     }
 }
-
-fn add_node(ui_state: &mut UIState) {}
 
 // Derived myself :)
 // From:
@@ -655,9 +533,13 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
             PortPrototype {
                 local_position: egui::vec2(100f32, 50f32),
                 name: "Out".to_string(),
-                kind: PortKindPrototype::Output,
+                kind: PortKindPrototype::Output(|_, _, _, _| None),
             },
         ],
+        state_prototype: NodeState {
+            state: HashMap::new(),
+            render: None,
+        },
     };
 
     let size = ui.available_size();
@@ -762,4 +644,30 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
     painter.extend(draw.other_shapes);
     painter.extend(draw.lines);
+
+    // https://github.com/emilk/egui/blob/a1d5145c16aba4d0b11668d496735d07520d0339/crates/egui_demo_lib/src/demo/pan_zoom.rs
+    // https://github.com/emilk/egui/blob/f6fa74c66578be17c1a2a80eb33b1704f17a3d5f/crates/egui/src/containers/scene.rs#L214
+
+    let components_layer = LayerId::new(ui.layer_id().order, ui.id().with("Node_Widgets"));
+
+    let mut inner_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .layer_id(components_layer)
+            .max_rect(Rect::EVERYTHING),
+    );
+
+    inner_ui.set_clip_rect(ui_state.view.inverse() * rect);
+
+    inner_ui
+        .ctx()
+        .set_transform_layer(components_layer, ui_state.view);
+
+    for n in &mut ui_state.world.nodes {
+        match n.state.render {
+            Some(f) => {
+                f(&mut inner_ui, &mut n.state.state, n.pos);
+            }
+            None => {}
+        }
+    }
 }

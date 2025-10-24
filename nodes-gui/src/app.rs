@@ -130,36 +130,62 @@ struct Connector {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-enum PortKind {
+enum PortKindPrototype {
     Input,
     Output,
 }
 
+impl PortKindPrototype {
+    fn instantiate(&self) -> PortKind {
+        match self {
+            PortKindPrototype::Input => PortKind::Input(None),
+            PortKindPrototype::Output => PortKind::Output,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum PortKind {
+    Input(Option<ID>),
+    Output,
+}
+
+impl PortKind {
+    pub fn is_input(&self) -> bool {
+        match self {
+            PortKind::Input(_) => true,
+            PortKind::Output => false,
+        }
+    }
+
+    pub fn is_output(&self) -> bool {
+        !self.is_input()
+    }
+}
+
 #[derive(Clone)]
-struct Port {
+pub struct Port {
     port_info: PortPrototype,
-    pos: egui::Pos2,
     node: ID,
+    connection_kind: PortKind,
 }
 
 #[derive(Clone)]
 struct PortPrototype {
     local_position: egui::Vec2,
     name: String,
-    kind: PortKind,
+    kind: PortKindPrototype,
 }
 
 // Contains all rendering information for a kind of node.
 #[derive(Clone)]
-struct NodePrototype {
+pub struct NodePrototype {
     name: String,
     ports: Vec<PortPrototype>,
     size: egui::Vec2,
 }
 
-struct Node {
-    connected_inputs: Vec<Option<SourceRef>>,
-
+pub struct Node {
     ports: Vec<ID>,
 
     // In future, should be Rc or id into list of existing prototypes
@@ -168,9 +194,9 @@ struct Node {
     pos: egui::Pos2,
 }
 
-struct NodeWorld {
-    nodes: Storage<Node>,
-    ports: Storage<Port>,
+pub struct NodeWorld {
+    pub nodes: Storage<Node>,
+    pub ports: Storage<Port>,
 }
 
 impl Default for NodeWorld {
@@ -182,7 +208,40 @@ impl Default for NodeWorld {
     }
 }
 
-impl NodeWorld {}
+impl NodeWorld {
+    pub fn get_port_pos(&self, id: ID) -> Pos2 {
+        self.get_port_pos_from_ref(self.ports.get(id))
+    }
+
+    pub fn get_port_pos_from_ref(&self, port: &Port) -> Pos2 {
+        self.nodes.get(port.node).pos + port.port_info.local_position
+    }
+
+    fn create_port_and_link(&mut self, node_id: ID, port_proto: &PortPrototype) -> ID {
+        let new_port = self.ports.create(Port {
+            port_info: port_proto.clone(),
+            node: node_id,
+            connection_kind: port_proto.kind.instantiate(),
+        });
+        new_port.1
+    }
+
+    pub fn create_node(&mut self, pos: Pos2, prototype: &NodePrototype) {
+        let new_obj = self
+            .nodes
+            .create(Node {
+                ports: Vec::new(),
+                prototype: prototype.clone(),
+                pos,
+            })
+            .1;
+
+        for p in &prototype.ports {
+            let new_p = self.create_port_and_link(new_obj, p);
+            self.nodes.get_mut(new_obj).ports.push(new_p);
+        }
+    }
+}
 
 enum DrawingConnection {
     FromInput(ID),
@@ -196,6 +255,11 @@ enum InteractingMode {
 
     Panning,
     Moving(Pos2, ID),
+}
+
+enum PortOrPos {
+    Port(ID),
+    Pos(Pos2),
 }
 
 struct UIState {
@@ -217,11 +281,11 @@ struct DrawingState {
 }
 
 impl UIState {
-    fn selected_node(&self, pos: Pos2) -> Option<&Node> {
-        for n in &self.world.nodes {
+    fn selected_node(&self, pos: Pos2) -> Option<(ID, &Node)> {
+        for (id, n) in self.world.nodes.with_ids() {
             let rect = Rect::from_min_size(n.pos, n.prototype.size);
             if rect.contains(pos) {
-                return Some(n);
+                return Some((*id, n));
             }
         }
         None
@@ -235,7 +299,7 @@ impl UIState {
             .into_iter()
             .filter(|f| pred(f.1))
         {
-            let p_pos = p.pos;
+            let p_pos = self.world.get_port_pos(*id); //p.pos
             let dist_square = (p_pos - pos).length_sq();
             if dist_square < 100f32 {
                 return Some(*id);
@@ -248,7 +312,7 @@ impl UIState {
         self.selected_port_pred(pos, |_| true)
     }
 
-    fn selected_port_of_kind(&self, pos: Pos2, kind: PortKind) -> Option<ID> {
+    fn selected_port_of_kind(&self, pos: Pos2, kind: PortKindPrototype) -> Option<ID> {
         self.selected_port_pred(pos, |f| f.port_info.kind == kind)
     }
 
@@ -276,6 +340,7 @@ impl UIState {
             .hover_pos()
             .or(response.interact_pointer_pos())
             .map(|p| self.view.inverse() * p);
+        let contains_ptr = response.contains_pointer();
         let mouse_down = response.is_pointer_button_down_on();
         let drag_started = response.drag_started();
         let dragging = response.dragged();
@@ -285,27 +350,33 @@ impl UIState {
             let pred: fn(&Port) -> bool = if inputs_hoverable && outputs_hoverable {
                 |_| true
             } else if inputs_hoverable {
-                |f| f.port_info.kind == PortKind::Input
+                |f| f.connection_kind.is_input()
             } else {
-                |f| f.port_info.kind == PortKind::Output
+                |f| f.connection_kind.is_output()
             };
 
             self.selection.hovered_port = self.selected_port_pred(pos, pred);
         }
+
+        let hovered_node = if contains_ptr {
+            mouse_pos.map(|f| self.selected_node(f))
+        } else {
+            None
+        };
 
         match &self.interacting_mode {
             InteractingMode::Idle => {
                 if let Some(p) = mouse_pos {
                     if let (true, Some(port)) = (mouse_down, self.selection.hovered_port) {
                         self.interacting_mode = InteractingMode::DrawingConnection(
-                            match self.world.ports.get(port).port_info.kind {
-                                PortKind::Input => DrawingConnection::FromInput(port),
+                            match self.world.ports.get(port).connection_kind {
+                                PortKind::Input(_) => DrawingConnection::FromInput(port),
                                 PortKind::Output => DrawingConnection::FromOutput(port),
                             },
                         );
                     } else if response.drag_started() {
                         if let Some(node_to_drag) = self.selected_node(p) {
-                            self.interacting_mode = InteractingMode::Moving(p, node_to_drag);
+                            self.interacting_mode = InteractingMode::Moving(p, node_to_drag.0);
                         } else {
                             self.interacting_mode = InteractingMode::Panning;
                         }
@@ -332,33 +403,35 @@ impl UIState {
                     let world_pos = self.view.inverse() * p_pos;
                     let diff = world_pos - *pos;
 
-                    self.world.get_mut_node(*node).pos += diff;
+                    self.world.nodes.get_mut(*node).pos += diff;
                     self.interacting_mode = InteractingMode::Moving(world_pos, *node);
                 }
             }
-            InteractingMode::DrawingConnection(DrawingConnection::FromInput(inp)) => {
-                if response.drag_stopped() {
-                    self.interacting_mode = InteractingMode::Idle;
-                } else if let (true, Some(p_pos)) =
-                    (response.contains_pointer(), response.interact_pointer_pos())
-                {
-                    let pos = self.view.inverse() * p_pos;
-                    self.selection.hovered_output_port = self.selected_output_port(pos);
-                    if let Some(outp_port) = self.selection.hovered_output_port {
-                        if outp_port.0 == inp.0 {
-                            self.selection.hovered_output_port = None;
+            InteractingMode::DrawingConnection(con) => {
+                if let (true, Some(pos)) = (contains_ptr, mouse_pos) {
+                    let begin_port = match con {
+                        DrawingConnection::FromInput(i) => *i,
+                        DrawingConnection::FromOutput(i) => *i,
+                    };
+                    if let Some(snap_port) = self.selection.hovered_port {
+                        if self.world.ports.get(snap_port).node
+                            == self.world.ports.get(begin_port).node
+                        {
+                            self.selection.hovered_port = None;
                         }
                     }
 
-                    let start_point = if let Some(outp_port) = self.selection.hovered_output_port {
-                        let n = self.world.get_node(outp_port.0);
-                        n.pos + n.prototype.outputs[outp_port.1].local_position
+                    let mut start_point = if let Some(end_port) = self.selection.hovered_port {
+                        self.world.get_port_pos(end_port)
                     } else {
                         pos
                     };
 
-                    let dest_point = self.world.get_node(inp.0).pos
-                        + self.world.get_node(inp.0).prototype.inputs[inp.1].local_position;
+                    let mut dest_point = self.world.get_port_pos(begin_port);
+
+                    if let DrawingConnection::FromOutput(_) = con {
+                        std::mem::swap(&mut dest_point, &mut start_point);
+                    }
 
                     draw_line(
                         &mut drawing_state.lines,
@@ -367,39 +440,23 @@ impl UIState {
                         100usize,
                         &self.view,
                     );
-                }
-            }
-            InteractingMode::DrawingConnection(DrawingConnection::FromOutput(outp)) => {
-                if response.drag_stopped() {
-                    self.interacting_mode = InteractingMode::Idle;
-                } else if let (true, Some(p_pos)) =
-                    (response.contains_pointer(), response.interact_pointer_pos())
-                {
-                    let pos = self.view.inverse() * p_pos;
-                    self.selection.hovered_input_port = self.selected_input_port(pos);
-                    if let Some(inp_port) = self.selection.hovered_input_port {
-                        if inp_port.0 == outp.0 {
-                            self.selection.hovered_input_port = None;
+
+                    if !mouse_down {
+                        let (outp_port, inp_port) = match con {
+                            DrawingConnection::FromInput(_) => {
+                                (self.selection.hovered_port, Some(begin_port))
+                            }
+                            DrawingConnection::FromOutput(_) => {
+                                (Some(begin_port), self.selection.hovered_port)
+                            }
+                        };
+
+                        if let (out, Some(inp)) = (outp_port, inp_port) {
+                            self.world.ports.get_mut(inp).connection_kind = PortKind::Input(out);
                         }
+
+                        self.interacting_mode = InteractingMode::Idle;
                     }
-
-                    let dest_point = if let Some(inp_port) = self.selection.hovered_input_port {
-                        let n = self.world.get_node(inp_port.0);
-                        n.pos + n.prototype.inputs[inp_port.1].local_position
-                    } else {
-                        pos
-                    };
-
-                    let start_point = self.world.get_node(outp.0).pos
-                        + self.world.get_node(outp.0).prototype.outputs[outp.1].local_position;
-
-                    draw_line(
-                        &mut drawing_state.lines,
-                        start_point,
-                        dest_point,
-                        100usize,
-                        &self.view,
-                    );
                 }
             }
         }
@@ -523,6 +580,7 @@ fn draw_port(
 fn draw_single_node(
     painter: &Painter,
     shapes: &mut Vec<Shape>,
+    world: &NodeWorld,
     node: &Node,
     view: TSTransform,
     select_state: &SelectionState,
@@ -557,31 +615,20 @@ fn draw_single_node(
     shapes.push(r);
     shapes.push(name_label);
 
-    for (ind, inp) in node.prototype.inputs.iter().enumerate() {
+    for inp in &node.ports {
+        let p = world.ports.get(*inp);
         draw_port(
             shapes,
             painter,
-            inp.name.clone(),
-            node.pos + inp.local_position,
-            Align::LEFT,
-            view,
-            if select_state.hovered_input_port == Some(InputPortId(node.id, ind)) {
-                Color32::WHITE
+            p.port_info.name.clone(),
+            node.pos + p.port_info.local_position,
+            if p.connection_kind.is_input() {
+                Align::LEFT
             } else {
-                Color32::RED
+                Align::RIGHT
             },
-        );
-    }
-
-    for (ind, outp) in node.prototype.outputs.iter().enumerate() {
-        draw_port(
-            shapes,
-            painter,
-            outp.name.clone(),
-            node.pos + outp.local_position,
-            Align::RIGHT,
             view,
-            if select_state.hovered_output_port == Some(OutputPortId(node.id, ind)) {
+            if select_state.hovered_port == Some(*inp) {
                 Color32::WHITE
             } else {
                 Color32::RED
@@ -593,21 +640,24 @@ fn draw_single_node(
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     let add_f32_prototype = NodePrototype {
         name: "Add Float".to_string(),
-        inputs: vec![
-            InputPort {
+        size: egui::vec2(100f32, 200f32),
+        ports: vec![
+            PortPrototype {
                 local_position: egui::vec2(0f32, 50f32),
                 name: "First".to_string(),
+                kind: PortKindPrototype::Input,
             },
-            InputPort {
+            PortPrototype {
                 local_position: egui::Vec2 { x: 0f32, y: 100f32 },
                 name: "Second".to_string(),
+                kind: PortKindPrototype::Input,
+            },
+            PortPrototype {
+                local_position: egui::vec2(100f32, 50f32),
+                name: "Out".to_string(),
+                kind: PortKindPrototype::Output,
             },
         ],
-        outputs: vec![OutputPort {
-            local_position: egui::vec2(100f32, 50f32),
-            name: "Out".to_string(),
-        }],
-        size: egui::vec2(100f32, 200f32),
     };
 
     let size = ui.available_size();
@@ -683,13 +733,27 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     }
     */
 
-    let v = vec![1, 2];
-    let b = &v.into_iter();
+    for p in &ui_state.world.ports {
+        match &p.connection_kind {
+            PortKind::Input(Some(outp_id)) => {
+                let l = (
+                    ui_state.world.get_port_pos(*outp_id),
+                    ui_state.world.get_port_pos_from_ref(p),
+                );
+
+                let diff = (l.1 - l.0) * ui_state.view.scaling;
+                let len = (diff.length() / 10f32).max(1f32).min(100f32);
+                draw_line(&mut draw.lines, l.0, l.1, len as usize, &ui_state.view);
+            }
+            _ => {}
+        }
+    }
 
     for n in &ui_state.world.nodes {
         draw_single_node(
             &painter,
             &mut draw.other_shapes,
+            &ui_state.world,
             n,
             ui_state.view,
             &ui_state.selection,

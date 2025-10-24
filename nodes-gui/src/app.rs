@@ -515,6 +515,20 @@ fn draw_single_node(
     }
 }
 
+fn render_constant_node(ui: &mut egui::Ui, state: &mut HashMap<String, f32>, pos: Pos2) {
+    let widget = egui::DragValue::new(state.get_mut("val").unwrap());
+    if ui
+        .put(
+            Rect::from_min_size(pos + vec2(0f32, 50f32), vec2(50f32, 80f32)),
+            egui::Button::new("HI"),
+        )
+        .clicked()
+    {
+        println!("CLICKED. YAY!");
+    }
+    //ui.put(Rect::from_min_size(pos, vec2(100f32, 100f32)), widget);
+}
+
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     let add_f32_prototype = NodePrototype {
         name: "Add Float".to_string(),
@@ -542,9 +556,33 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         },
     };
 
+    let const_f32_prototype = NodePrototype {
+        name: "Constant".to_string(),
+        ports: vec![],
+        state_prototype: NodeState {
+            state: HashMap::from([("val".to_string(), 1f32)]),
+            render: Some(render_constant_node),
+        },
+        size: vec2(100f32, 100f32),
+    };
+
     let size = ui.available_size();
 
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+
+    let components_layer = LayerId::new(ui.layer_id().order, ui.id().with("Node_Widgets"));
+
+    let mut inner_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .layer_id(components_layer)
+            .max_rect(Rect::EVERYTHING),
+    );
+
+    inner_ui.set_clip_rect(ui_state.view.inverse() * rect);
+
+    inner_ui
+        .ctx()
+        .set_transform_layer(components_layer, ui_state.view);
 
     /*
     if response.secondary_clicked() {
@@ -578,7 +616,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
             let world_pos = ui_state.view.inverse() * h_pos;
             //println!("Zooming on {}", world_pos);
 
-            // The zoom transformation happens before view because it is a world-space
+            // The zoom transformation happens before vie(ui, state, pos)w because it is a world-space
             // transformation.
 
             ui_state.view = ui_state.view
@@ -601,6 +639,12 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
             ui_state.world.create_node(
                 ui_state.view.inverse() * ui.min_rect().min,
                 &add_f32_prototype,
+            );
+        }
+        if ui.button("Const").clicked() {
+            ui_state.world.create_node(
+                ui_state.view.inverse() * ui.min_rect().min,
+                &const_f32_prototype,
             );
         }
     });
@@ -647,20 +691,6 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
     // https://github.com/emilk/egui/blob/a1d5145c16aba4d0b11668d496735d07520d0339/crates/egui_demo_lib/src/demo/pan_zoom.rs
     // https://github.com/emilk/egui/blob/f6fa74c66578be17c1a2a80eb33b1704f17a3d5f/crates/egui/src/containers/scene.rs#L214
-
-    let components_layer = LayerId::new(ui.layer_id().order, ui.id().with("Node_Widgets"));
-
-    let mut inner_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .layer_id(components_layer)
-            .max_rect(Rect::EVERYTHING),
-    );
-
-    inner_ui.set_clip_rect(ui_state.view.inverse() * rect);
-
-    inner_ui
-        .ctx()
-        .set_transform_layer(components_layer, ui_state.view);
 
     for n in &mut ui_state.world.nodes {
         match n.state.render {

@@ -81,7 +81,7 @@ impl<T> Storage<T> {
         self.entries.iter_mut()
     }
 
-    pub fn ids(&self) -> &impl IntoIterator<Item = ID> {
+    pub fn ids(&self) -> &Vec<ID> {
         &self.ids
     }
 

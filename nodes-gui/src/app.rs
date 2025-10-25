@@ -134,9 +134,6 @@ enum InteractingMode {
     Idle,
 
     DrawingConnection(DrawingConnection),
-
-    Panning,
-    Moving(Pos2, ID),
 }
 
 enum PortOrPos {
@@ -218,24 +215,12 @@ impl UIState {
             _ => false,
         };
 
-        let mouse_pos = response.hover_pos().or(response.interact_pointer_pos());
-        let contains_ptr = response.contains_pointer();
+        let mut mouse_pos = response.hover_pos().or(response.interact_pointer_pos());
+        let contains_ptr = ui.ui_contains_pointer();
         let mouse_down = response.is_pointer_button_down_on();
         let drag_started = response.drag_started();
         let dragging = response.dragged();
         let drag_stopped = response.drag_stopped();
-
-        if let (true, Some(pos)) = (inputs_hoverable || outputs_hoverable, mouse_pos) {
-            let pred: fn(&Port) -> bool = if inputs_hoverable && outputs_hoverable {
-                |_| true
-            } else if inputs_hoverable {
-                |f| f.connection_kind.is_input()
-            } else {
-                |f| f.connection_kind.is_output()
-            };
-
-            self.selection.hovered_port = self.selected_port_pred(pos, pred);
-        }
 
         let hovered_node = if contains_ptr {
             mouse_pos.map(|f| self.selected_node(f)).flatten()
@@ -243,51 +228,77 @@ impl UIState {
             None
         };
 
-        match &self.interacting_mode {
-            InteractingMode::Idle => {
-                if let Some(p) = mouse_pos {
-                    if let (true, Some(port)) = (mouse_down, self.selection.hovered_port) {
-                        self.interacting_mode = InteractingMode::DrawingConnection(
-                            match self.world.ports.get(port).connection_kind {
-                                PortKind::Input(_) => DrawingConnection::FromInput(port),
-                                PortKind::Output(_) => DrawingConnection::FromOutput(port),
-                            },
-                        );
-                    } else if response.drag_started() {
-                        if let Some(node_to_drag) = self.selected_node(p) {
-                            self.interacting_mode = InteractingMode::Moving(p, node_to_drag.0);
-                        } else {
-                            self.interacting_mode = InteractingMode::Panning;
-                        }
+        let nodes_draggable = match &self.interacting_mode {
+            InteractingMode::Idle => true,
+            _ => false,
+        };
+
+        let node_ids: Vec<ID> = self.world.nodes.ids().clone();
+
+        let mut create_line_if_able = false;
+
+        self.selection.hovered_port = None;
+
+        for i in node_ids {
+            let n = self.world.nodes.get(i);
+            let node_rect = ui.allocate_rect(
+                Rect::from_min_size(n.pos, n.prototype.size),
+                Sense::click_and_drag(),
+            );
+
+            let n = self.world.nodes.get_mut(i);
+
+            if nodes_draggable {
+                if node_rect.drag_started() {
+                    //self.interacting_mode =
+                    //    InteractingMode::Moving(node_rect.interact_pointer_pos().unwrap(), *i);
+                } else if node_rect.dragged() {
+                    let delta = node_rect.drag_delta();
+                    n.pos += delta;
+                } else if node_rect.drag_stopped() {
+                    self.interacting_mode = InteractingMode::Idle;
+                }
+            }
+
+            let n = &*n;
+
+            for p in &n.ports {
+                let port = self.world.ports.get(*p);
+                let port_rect = ui.allocate_rect(
+                    Rect::from_center_size(
+                        n.pos + port.port_info.local_position,
+                        vec2(20f32, 20f32),
+                    ),
+                    Sense::drag(),
+                );
+
+                if port_rect.drag_started() {
+                    self.interacting_mode =
+                        InteractingMode::DrawingConnection(match port.connection_kind {
+                            PortKind::Input(_) => DrawingConnection::FromInput(*p),
+                            PortKind::Output(_) => DrawingConnection::FromOutput(*p),
+                        });
+                }
+                if port_rect.drag_stopped() {
+                    create_line_if_able = true;
+                }
+
+                if port_rect.contains_pointer() {
+                    if (inputs_hoverable && port.connection_kind.is_input())
+                        || (outputs_hoverable && port.connection_kind.is_output())
+                    {
+                        self.selection.hovered_port = Some(*p);
                     }
                 }
-            }
-            InteractingMode::Panning => {
-                if response.drag_stopped() {
-                    self.interacting_mode = InteractingMode::Idle;
-                }
-                let delt = response.drag_delta();
-                if delt.x != 0f32 || delt.y != 0f32 {
-                    // This happens after view because it's a screen-space transformation.
-                    //self.view = TSTransform::from_translation(delt) * self.view;
-                }
-            }
-            InteractingMode::Moving(pos, node) => {
-                self.selection.selected_nodes = vec![*node];
-                if response.drag_stopped() {
-                    self.interacting_mode = InteractingMode::Idle;
-                } else if let (true, Some(pos2)) =
-                    (response.contains_pointer(), response.interact_pointer_pos())
-                {
-                    let world_pos = pos2;
-                    let diff = world_pos - *pos;
 
-                    self.world.nodes.get_mut(*node).pos += diff;
-                    self.interacting_mode = InteractingMode::Moving(world_pos, *node);
-                }
+                mouse_pos = mouse_pos.or(port_rect.interact_pointer_pos());
             }
+        }
+
+        match &self.interacting_mode {
+            InteractingMode::Idle => {}
             InteractingMode::DrawingConnection(con) => {
-                if let (true, Some(pos)) = (contains_ptr, mouse_pos) {
+                if let Some(pos) = mouse_pos {
                     let begin_port = match con {
                         DrawingConnection::FromInput(i) => *i,
                         DrawingConnection::FromOutput(i) => *i,
@@ -314,7 +325,7 @@ impl UIState {
 
                     draw_line(&mut drawing_state.lines, start_point, dest_point, 100usize);
 
-                    if !mouse_down {
+                    if create_line_if_able {
                         let (outp_port, inp_port) = match con {
                             DrawingConnection::FromInput(_) => {
                                 (self.selection.hovered_port, Some(begin_port))
@@ -330,6 +341,8 @@ impl UIState {
 
                         self.interacting_mode = InteractingMode::Idle;
                     }
+                } else if create_line_if_able {
+                    self.interacting_mode = InteractingMode::Idle;
                 }
             }
         }
@@ -520,7 +533,12 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     ); */
     let mut vrect = ui_state.view_rect;
 
+    let scene_screen_rect = ui.available_rect_before_wrap();
+
     egui::containers::Scene::new().show(ui, &mut vrect, |ui| {
+        let screen_to_scene =
+            egui::emath::RectTransform::from_to(scene_screen_rect, ui_state.view_rect);
+
         let mut response = ui.response();
 
         let mut draw = DrawingState {
@@ -538,16 +556,14 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         );
 
         response.context_menu(|ui| {
+            let pos = ui.min_rect().min;
+            let pos = screen_to_scene * pos;
             //println!("CTX");
             if ui.button("Add").clicked() {
-                ui_state
-                    .world
-                    .create_node(ui.min_rect().min, &add_f32_prototype);
+                ui_state.world.create_node(pos, &add_f32_prototype);
             }
             if ui.button("Const").clicked() {
-                ui_state
-                    .world
-                    .create_node(ui.min_rect().min, &const_f32_prototype);
+                ui_state.world.create_node(pos, &const_f32_prototype);
             }
         });
 

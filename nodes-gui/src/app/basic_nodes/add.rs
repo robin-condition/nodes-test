@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use egui::{Pos2, UiBuilder};
+use egui::Pos2;
 use rpds::HashTrieMap;
 
 use crate::app::{
@@ -39,7 +39,7 @@ pub fn add_node_prototype() -> NodePrototype {
     }
 }
 
-fn add_render(ui: &mut egui::Ui, state: &mut HashMap<String, StateValue>, pos: Pos2) {
+fn add_render(ui: &mut egui::Ui, state: &mut HashMap<String, StateValue>, _: Pos2) -> bool {
     let val = get_state_char_mut("op", state).unwrap();
     egui::containers::ComboBox::from_id_salt("test_box")
         .width(10f32)
@@ -48,7 +48,9 @@ fn add_render(ui: &mut egui::Ui, state: &mut HashMap<String, StateValue>, pos: P
             ui.selectable_value(val, '+', "Add");
             ui.selectable_value(val, '-', "Sub");
             ui.selectable_value(val, '*', "Mul");
-        });
+        })
+        .response
+        .changed()
 }
 
 fn add_node_eval(

@@ -1,12 +1,8 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
-use egui::{Pos2, Rect, vec2};
-use rpds::HashTrieMap;
+use egui::vec2;
 
-use crate::app::{
-    editor_graph::{NodePrototype, NodeState, NodeWorld, PortPrototype, StateValue},
-    storage::ID,
-};
+use crate::app::editor_graph::{NodePrototype, NodeState, PortPrototype};
 
 pub fn done_node() -> NodePrototype {
     NodePrototype {

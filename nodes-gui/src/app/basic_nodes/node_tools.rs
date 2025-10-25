@@ -79,3 +79,25 @@ pub fn get_state_f32_mut<'a>(
         _ => None,
     }
 }
+
+pub fn get_state_string<'a>(
+    name: &str,
+    state: &'a HashMap<String, StateValue>,
+) -> Option<&'a String> {
+    let val = state.get(name)?;
+    match val {
+        StateValue::String(c) => Some(c),
+        _ => None,
+    }
+}
+
+pub fn get_state_string_mut<'a>(
+    name: &str,
+    state: &'a mut HashMap<String, StateValue>,
+) -> Option<&'a mut String> {
+    let val = state.get_mut(name)?;
+    match val {
+        StateValue::String(c) => Some(c),
+        _ => None,
+    }
+}

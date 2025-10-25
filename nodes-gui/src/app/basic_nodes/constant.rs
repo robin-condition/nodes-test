@@ -34,12 +34,17 @@ fn evaluate_constant_node(
     get_state_f32("val", state)
 }
 
-fn render_constant_node(ui: &mut egui::Ui, state: &mut HashMap<String, StateValue>, pos: Pos2) {
+fn render_constant_node(
+    ui: &mut egui::Ui,
+    state: &mut HashMap<String, StateValue>,
+    pos: Pos2,
+) -> bool {
     let val = get_state_f32_mut("val", state).unwrap();
-    let widget = egui::Slider::new(val, -10f32..=10f32).clamping(egui::SliderClamping::Never);
+    let widget = egui::Slider::new(val, 0f32..=1f32).clamping(egui::SliderClamping::Never);
     ui.put(
         Rect::from_min_size(pos + vec2(0f32, 50f32), vec2(30f32, 15f32)),
         widget,
-    );
+    )
+    .changed()
     //ui.put(Rect::from_min_size(pos, vec2(100f32, 100f32)), widget);
 }

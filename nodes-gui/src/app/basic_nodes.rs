@@ -1,4 +1,5 @@
 pub mod add;
+pub mod attribute;
 pub mod constant;
 pub mod exp;
 pub mod image;

@@ -1,7 +1,8 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
 use egui::{
-    Align, Color32, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, UiBuilder,
+    Align, Color32, ColorImage, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
+    TextureOptions, UiBuilder,
     epaint::{CircleShape, PathShape, PathStroke, RectShape, TextShape},
     pos2,
     text::LayoutJob,
@@ -10,15 +11,15 @@ use egui::{
 
 pub mod editor_graph;
 pub mod storage;
-use editor_graph::{Node, Port, PortKind};
+use editor_graph::{Node, PortKind};
 
 use rpds::HashTrieMap;
 use storage::*;
 
 use crate::app::{
     basic_nodes::{
-        add::add_node_prototype, constant::constant_node_prototype, exp::exp_prototype,
-        image::done_node,
+        add::add_node_prototype, attribute::attribute_prototype, constant::constant_node_prototype,
+        exp::exp_prototype, image::done_node,
     },
     editor_graph::{NodePrototype, NodeWorld},
 };
@@ -34,8 +35,11 @@ pub struct App {
     state: UIState,
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl App {
+    /// Called once before the first frame.
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        // This is also where you can customize the look and feel of egui using
+        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
         Self {
             // Example stuff:
             label: "Hello World!".to_owned(),
@@ -47,23 +51,21 @@ impl Default for App {
                 interacting_mode: InteractingMode::Idle,
                 view_rect: Rect::from_min_size(Pos2 { x: 0f32, y: 0f32 }, vec2(200f32, 200f32)),
                 selection: Default::default(),
+                texture_to_see: _cc.egui_ctx.load_texture(
+                    "my_tex_name",
+                    ColorImage::filled([128, 128], Color32::BLACK),
+                    TextureOptions::default(),
+                ),
+                texture_outdated: true,
                 prototypes: vec![
                     constant_node_prototype(),
                     add_node_prototype(),
                     done_node(),
                     exp_prototype(),
+                    attribute_prototype(),
                 ],
             },
         }
-    }
-}
-
-impl App {
-    /// Called once before the first frame.
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // This is also where you can customize the look and feel of egui using
-        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-        Default::default()
     }
 }
 
@@ -148,11 +150,6 @@ enum InteractingMode {
     DrawingConnection(DrawingConnection),
 }
 
-enum PortOrPos {
-    Port(ID),
-    Pos(Pos2),
-}
-
 struct UIState {
     world: NodeWorld,
     add_pos: Option<Pos2>,
@@ -161,11 +158,14 @@ struct UIState {
     interacting_mode: InteractingMode,
     selection: SelectionState,
     prototypes: Vec<NodePrototype>,
+
+    texture_outdated: bool,
+    texture_to_see: egui::TextureHandle,
 }
 
 #[derive(Default)]
 struct SelectionState {
-    selected_nodes: Vec<ID>,
+    _selected_nodes: Vec<ID>,
     hovered_port: Option<ID>,
 }
 
@@ -183,31 +183,6 @@ impl UIState {
             }
         }
         None
-    }
-
-    fn selected_port_pred(&self, pos: Pos2, pred: impl Fn(&Port) -> bool) -> Option<ID> {
-        for (id, p) in self
-            .world
-            .ports
-            .with_ids()
-            .into_iter()
-            .filter(|f| pred(f.1))
-        {
-            let p_pos = self.world.get_port_pos(*id); //p.pos
-            let dist_square = (p_pos - pos).length_sq();
-            if dist_square < 100f32 {
-                return Some(*id);
-            }
-        }
-        None
-    }
-
-    fn selected_port(&self, pos: Pos2) -> Option<ID> {
-        self.selected_port_pred(pos, |_| true)
-    }
-
-    fn selected_port_of_kind(&self, pos: Pos2, input: bool) -> Option<ID> {
-        self.selected_port_pred(pos, |f| f.connection_kind.is_input() == input)
     }
 
     pub fn act(
@@ -232,12 +207,12 @@ impl UIState {
 
         let mut mouse_pos = response.hover_pos().or(response.interact_pointer_pos());
         let contains_ptr = ui.ui_contains_pointer();
-        let mouse_down = response.is_pointer_button_down_on();
-        let drag_started = response.drag_started();
-        let dragging = response.dragged();
-        let drag_stopped = response.drag_stopped();
+        let _mouse_down = response.is_pointer_button_down_on();
+        let _drag_started = response.drag_started();
+        let _dragging = response.dragged();
+        let _drag_stopped = response.drag_stopped();
 
-        let hovered_node = if contains_ptr {
+        let _hovered_node = if contains_ptr {
             mouse_pos.map(|f| self.selected_node(f)).flatten()
         } else {
             None
@@ -355,9 +330,12 @@ impl UIState {
                         }
 
                         self.interacting_mode = InteractingMode::Idle;
+
+                        self.texture_outdated = true;
                     }
                 } else if create_line_if_able {
                     self.interacting_mode = InteractingMode::Idle;
+                    self.texture_outdated = true;
                 }
             }
         }
@@ -410,7 +388,7 @@ fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize)
         },
     };
 
-    let mut shape = Shape::Path(path);
+    let shape = Shape::Path(path);
     //shape.transform(*view);
     lines.push(shape);
 }
@@ -443,7 +421,7 @@ fn draw_port(
     node_side: Align,
     color: Color32,
 ) {
-    let mut circle: Shape = CircleShape {
+    let circle: Shape = CircleShape {
         center: pos,
         radius: 5f32,
         fill: color,
@@ -470,7 +448,7 @@ fn draw_single_node(
     node: &Node,
     select_state: &SelectionState,
 ) {
-    let mut r: Shape = RectShape {
+    let r: Shape = RectShape {
         rect: Rect {
             min: node.pos,
             max: node.pos + node.prototype.size,
@@ -520,6 +498,31 @@ fn draw_single_node(
     }
 }
 
+fn get_bytes_array(world: &NodeWorld, id: ID) -> Option<[u8; 128 * 128]> {
+    const WIDTH: usize = 128;
+    const HEIGHT: usize = 128;
+    let mut bytes = [0u8; WIDTH * HEIGHT];
+
+    for x in 0..WIDTH {
+        for y in 0..HEIGHT {
+            let b = world.evaluate_output_port(
+                id,
+                HashTrieMap::new()
+                    .insert("x".to_string(), x as f32 / WIDTH as f32)
+                    .insert("y".to_string(), y as f32 / HEIGHT as f32),
+            )?;
+            let ind = y * WIDTH + x;
+            let byte = (b * 255f32) as u8;
+            bytes[ind] = byte;
+            //bytes[ind * 3] = byte;
+            //bytes[ind * 3 + 1] = byte;
+            //bytes[ind * 3 + 2] = byte;
+        }
+    }
+
+    Some(bytes)
+}
+
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     //let size = ui.available_size();
     //let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -545,21 +548,43 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
 
     ui.label(format!("Hello! Value: {:?}", ui_state.val));
 
-    for n in &ui_state.world.nodes {
-        if n.prototype.name == "Out" {
-            let inp = match ui_state.world.ports.get(n.ports[0]).connection_kind {
-                PortKind::Input(i) => i,
-                _ => panic!(),
-            };
+    if ui_state.texture_outdated {
+        for n in &ui_state.world.nodes {
+            if n.prototype.name == "Out" {
+                let inp = match ui_state.world.ports.get(n.ports[0]).connection_kind {
+                    PortKind::Input(i) => i,
+                    _ => panic!(),
+                };
 
-            ui_state.val = match inp {
-                Some(op) => ui_state.world.evaluate_output_port(op, HashTrieMap::new()),
-                None => None,
-            };
+                ui_state.val = match inp {
+                    Some(op) => ui_state.world.evaluate_output_port(op, HashTrieMap::new()),
+                    None => None,
+                };
+
+                if let Some(op) = inp {
+                    let bytes = get_bytes_array(&ui_state.world, op);
+                    if let Some(bytes) = bytes {
+                        ui_state.texture_to_see.set(
+                            ColorImage::from_gray([128, 128], &bytes),
+                            TextureOptions::NEAREST,
+                        );
+                    }
+                }
+            }
         }
+
+        ui_state.texture_outdated = false;
     }
 
     let mut vrect = ui_state.view_rect;
+
+    ui.painter().image(
+        ui_state.texture_to_see.id(),
+        //Rect::from_min_size(Pos2::ZERO, vec2(128f32, 128f32)),
+        ui.available_rect_before_wrap(),
+        Rect::from_min_max(Pos2::ZERO, pos2(1f32, 1f32)),
+        Color32::WHITE,
+    );
 
     egui::containers::Scene::new().show(ui, &mut vrect, |ui| {
         let mut response = ui.response();
@@ -570,13 +595,6 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         };
 
         ui_state.act(ui, &mut response, &mut draw);
-
-        let button = egui::Button::new("TESTING BUTTON");
-
-        ui.put(
-            Rect::from_min_size(pos2(100f32, 100f32), vec2(50f32, 50f32)),
-            button,
-        );
 
         if response.secondary_clicked() {
             ui_state.add_pos = response.interact_pointer_pos();
@@ -607,7 +625,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
                         ui_state.world.get_port_pos_from_ref(p),
                     );
 
-                    let diff = (l.1 - l.0); // * ui_state.view.scaling;
+                    let diff = /*(*/ l.1 - l.0 /*)*/; // * ui_state.view.scaling;
                     let len = (diff.length() / 10f32).max(1f32).min(100f32);
                     draw_line(&mut draw.lines, l.0, l.1, len as usize);
                 }
@@ -638,7 +656,9 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
                     ui.scope_builder(
                         UiBuilder::new().max_rect(node_rect).id_salt(("node", *i)),
                         |ui| {
-                            f(ui, &mut n.state.state, n.pos);
+                            if f(ui, &mut n.state.state, n.pos) {
+                                ui_state.texture_outdated = true;
+                            }
                         },
                     );
                     //f(ui, &mut n.state.state, n.pos);
@@ -672,35 +692,35 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     }*/
 
     /*
-    // Zoom!
-    // https://github.com/emilk/egui/discussions/4531
-    if let (true, Some(h_pos)) = (
-        response.contains_pointer(),
-        ui.input(|i| i.pointer.hover_pos()),
-    ) {
-        let mut zoom_factor = ui.input(|i| i.zoom_delta());
-        if zoom_factor != 1f32 {
-            let max_scaling = 5.0f32;
+        // Zoom!
+        // https://github.com/emilk/egui/discussions/4531
+        if let (true, Some(h_pos)) = (
+            response.contains_pointer(),
+            ui.input(|i| i.pointer.hover_pos()),
+        ) {
+            let mut zoom_factor = ui.input(|i| i.zoom_delta());
+            if zoom_factor != 1f32 {
+                let max_scaling = 5.0f32;
 
-            let resulting_zoom = ui_state.view.scaling * zoom_factor;
+                let resulting_zoom = ui_state.view.scaling * zoom_factor;
 
-            if resulting_zoom > max_scaling {
-                zoom_factor = max_scaling / ui_state.view.scaling;
+                if resulting_zoom > max_scaling {
+                    zoom_factor = max_scaling / ui_state.view.scaling;
+                }
+
+                let world_pos = ui_state.view.inverse() * h_pos;
+                //println!("Zooming on {}", world_pos);
+
+                // The zoom transformation happens before vie(ui, state, pos)w because it is a world-space
+                // transformation.
+    self.
+                ui_state.view = ui_state.view
+                    * TSTransform::from_translation(world_pos.to_vec2())
+                    * TSTransform::from_scaling(zoom_factor)
+                    * TSTransform::from_translation(-world_pos.to_vec2());
             }
-
-            let world_pos = ui_state.view.inverse() * h_pos;
-            //println!("Zooming on {}", world_pos);
-
-            // The zoom transformation happens before vie(ui, state, pos)w because it is a world-space
-            // transformation.
-
-            ui_state.view = ui_state.view
-                * TSTransform::from_translation(world_pos.to_vec2())
-                * TSTransform::from_scaling(zoom_factor)
-                * TSTransform::from_translation(-world_pos.to_vec2());
         }
-    }
-    */
+        */
 
     // https://github.com/emilk/egui/blob/a1d5145c16aba4d0b11668d496735d07520d0339/crates/egui_demo_lib/src/demo/pan_zoom.rs
     // https://github.com/emilk/egui/blob/f6fa74c66578be17c1a2a80eb33b1704f17a3d5f/crates/egui/src/containers/scene.rs#L214

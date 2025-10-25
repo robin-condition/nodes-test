@@ -8,6 +8,7 @@ use crate::app::storage::{ID, Storage};
 pub enum StateValue {
     Float(f32),
     Char(char),
+    String(String),
 }
 
 type OutputEvaluationFn = fn(
@@ -68,7 +69,7 @@ pub struct PortPrototype {
 #[derive(Clone, Default)]
 pub struct NodeState {
     pub state: HashMap<String, StateValue>,
-    pub render: Option<fn(&mut egui::Ui, &mut HashMap<String, StateValue>, egui::Pos2) -> ()>,
+    pub render: Option<fn(&mut egui::Ui, &mut HashMap<String, StateValue>, egui::Pos2) -> bool>,
 }
 
 // Contains all rendering information for a kind of node.

@@ -1,19 +1,16 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
-use std::collections::HashMap;
-
 use egui::{
-    Align, Area, Color32, FontId, Label, LayerId, Painter, Pos2, Rect, Response, Sense, Shape,
-    Stroke, Widget,
-    emath::TSTransform,
+    Align, Color32, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
     epaint::{CircleShape, PathShape, PathStroke, RectShape, TextShape},
+    pos2,
     text::LayoutJob,
     vec2,
 };
 
 pub mod editor_graph;
 pub mod storage;
-use editor_graph::{Node, NodePrototype, Port, PortKind, PortKindPrototype, PortPrototype};
+use editor_graph::{Node, Port, PortKind};
 
 use storage::*;
 
@@ -23,7 +20,6 @@ use crate::app::{
 };
 
 pub mod basic_nodes;
-use basic_nodes::*;
 
 pub struct App {
     // Example stuff:
@@ -43,7 +39,7 @@ impl Default for App {
             state: UIState {
                 world: Default::default(),
                 interacting_mode: InteractingMode::Idle,
-                view: TSTransform::IDENTITY,
+                view_rect: Rect::ZERO,
                 selection: Default::default(),
             },
         }
@@ -150,7 +146,7 @@ enum PortOrPos {
 
 struct UIState {
     world: NodeWorld,
-    view: TSTransform,
+    view_rect: Rect,
     interacting_mode: InteractingMode,
     selection: SelectionState,
 }
@@ -222,10 +218,7 @@ impl UIState {
             _ => false,
         };
 
-        let mouse_pos = response
-            .hover_pos()
-            .or(response.interact_pointer_pos())
-            .map(|p| self.view.inverse() * p);
+        let mouse_pos = response.hover_pos().or(response.interact_pointer_pos());
         let contains_ptr = response.contains_pointer();
         let mouse_down = response.is_pointer_button_down_on();
         let drag_started = response.drag_started();
@@ -245,7 +238,7 @@ impl UIState {
         }
 
         let hovered_node = if contains_ptr {
-            mouse_pos.map(|f| self.selected_node(f))
+            mouse_pos.map(|f| self.selected_node(f)).flatten()
         } else {
             None
         };
@@ -276,17 +269,17 @@ impl UIState {
                 let delt = response.drag_delta();
                 if delt.x != 0f32 || delt.y != 0f32 {
                     // This happens after view because it's a screen-space transformation.
-                    self.view = TSTransform::from_translation(delt) * self.view;
+                    //self.view = TSTransform::from_translation(delt) * self.view;
                 }
             }
             InteractingMode::Moving(pos, node) => {
                 self.selection.selected_nodes = vec![*node];
                 if response.drag_stopped() {
                     self.interacting_mode = InteractingMode::Idle;
-                } else if let (true, Some(p_pos)) =
+                } else if let (true, Some(pos2)) =
                     (response.contains_pointer(), response.interact_pointer_pos())
                 {
-                    let world_pos = self.view.inverse() * p_pos;
+                    let world_pos = pos2;
                     let diff = world_pos - *pos;
 
                     self.world.nodes.get_mut(*node).pos += diff;
@@ -319,13 +312,7 @@ impl UIState {
                         std::mem::swap(&mut dest_point, &mut start_point);
                     }
 
-                    draw_line(
-                        &mut drawing_state.lines,
-                        start_point,
-                        dest_point,
-                        100usize,
-                        &self.view,
-                    );
+                    draw_line(&mut drawing_state.lines, start_point, dest_point, 100usize);
 
                     if !mouse_down {
                         let (outp_port, inp_port) = match con {
@@ -359,13 +346,7 @@ fn smoother_step(t: f32) -> f32 {
     ((6f32 * t - 15f32) * t + 10f32) * t.powi(3)
 }
 
-fn draw_line(
-    lines: &mut Vec<Shape>,
-    start_pt: Pos2,
-    end_pt: Pos2,
-    steps: usize,
-    view: &TSTransform,
-) {
+fn draw_line(lines: &mut Vec<Shape>, start_pt: Pos2, end_pt: Pos2, steps: usize) {
     let dist = end_pt - start_pt;
     let steps = steps + 2;
     let pts: Vec<Pos2> = (0..=steps)
@@ -402,7 +383,7 @@ fn draw_line(
     };
 
     let mut shape = Shape::Path(path);
-    shape.transform(*view);
+    //shape.transform(*view);
     lines.push(shape);
 }
 
@@ -413,18 +394,14 @@ fn draw_text(
     font_size: f32,
     halign: Align,
     valign: Align,
-    view: TSTransform,
 ) -> TextShape {
-    let mut job = LayoutJob::simple_singleline(
-        text,
-        FontId::proportional(font_size * view.scaling),
-        Color32::WHITE,
-    );
+    let mut job =
+        LayoutJob::simple_singleline(text, FontId::proportional(font_size), Color32::WHITE);
     job.halign = halign;
     let galley = painter.layout_job(job);
     let rect = galley.rect;
     TextShape::new(
-        view * pos - vec2(0f32, rect.bottom() * valign.to_factor()),
+        pos - vec2(0f32, rect.bottom() * valign.to_factor()),
         galley,
         Color32::WHITE,
     )
@@ -436,7 +413,6 @@ fn draw_port(
     text: String,
     pos: Pos2,
     node_side: Align,
-    view: TSTransform,
     color: Color32,
 ) {
     let mut circle: Shape = CircleShape {
@@ -446,7 +422,6 @@ fn draw_port(
         stroke: Stroke::NONE,
     }
     .into();
-    circle.transform(view);
     shapes.push(circle);
 
     let text_view = draw_text(
@@ -456,7 +431,6 @@ fn draw_port(
         10f32,
         node_side,
         Align::Center,
-        view,
     );
     shapes.push(text_view.into());
 }
@@ -466,7 +440,6 @@ fn draw_single_node(
     shapes: &mut Vec<Shape>,
     world: &NodeWorld,
     node: &Node,
-    view: TSTransform,
     select_state: &SelectionState,
 ) {
     let mut r: Shape = RectShape {
@@ -483,7 +456,7 @@ fn draw_single_node(
         brush: None,
     }
     .into();
-    r.transform(view);
+    //r.transform(view);
 
     let name_label = draw_text(
         painter,
@@ -492,7 +465,6 @@ fn draw_single_node(
         14f32,
         Align::LEFT,
         Align::TOP,
-        view,
     )
     .into();
     //name_label.translate(view.translation);
@@ -511,7 +483,6 @@ fn draw_single_node(
             } else {
                 Align::RIGHT
             },
-            view,
             if select_state.hovered_port == Some(*inp) {
                 Color32::WHITE
             } else {
@@ -530,10 +501,6 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     //let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
     //egui::Area::new("HI").show(ctx, add_contents);
-
-    let rect = ui.available_rect_before_wrap();
-    let size = rect.size();
-    let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
     /*
     let layer_stuff = LayerId::new(egui::Order::Foreground, ui.id().with("LayerStuff"));
 
@@ -551,37 +518,85 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         Rect::from_min_size(rect.min, rect.size() / 3f32),
         egui::Button::new("HELLO"),
     ); */
+    let mut vrect = ui_state.view_rect;
 
-    let components_layer = LayerId::new(egui::Order::Foreground, ui.id().with("Node_Widgets"));
+    egui::containers::Scene::new().show(ui, &mut vrect, |ui| {
+        let mut response = ui.response();
 
-    // TODO: Move everything to using inner_ui because it eats clicks and such.
-    // OR: Move everything to individual, own inner_uis!
+        let mut draw = DrawingState {
+            lines: vec![],
+            other_shapes: vec![],
+        };
 
-    let mut inner_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .layer_id(components_layer)
-            .max_rect(Rect::EVERYTHING)
-            .sense(Sense::empty()),
-    );
+        ui_state.act(ui, &mut response, &mut draw);
 
-    inner_ui.set_clip_rect(ui_state.view.inverse() * rect);
-    inner_ui.set_min_size(ui_state.view.inverse().scaling * rect.size());
-    //inner_ui.set_height(height);
+        let button = egui::Button::new("TESTING BUTTON");
 
-    inner_ui
-        .ctx()
-        .set_transform_layer(components_layer, ui_state.view);
+        ui.put(
+            Rect::from_min_size(pos2(100f32, 100f32), vec2(50f32, 50f32)),
+            button,
+        );
 
-    for n in &mut ui_state.world.nodes {
-        match n.state.render {
-            Some(f) => {
-                f(&mut inner_ui, &mut n.state.state, n.pos);
+        response.context_menu(|ui| {
+            //println!("CTX");
+            if ui.button("Add").clicked() {
+                ui_state
+                    .world
+                    .create_node(ui.min_rect().min, &add_f32_prototype);
             }
-            None => {}
-        }
-    }
+            if ui.button("Const").clicked() {
+                ui_state
+                    .world
+                    .create_node(ui.min_rect().min, &const_f32_prototype);
+            }
+        });
 
-    drop(inner_ui);
+        let painter = ui.painter();
+
+        for p in &ui_state.world.ports {
+            match &p.connection_kind {
+                PortKind::Input(Some(outp_id)) => {
+                    let l = (
+                        ui_state.world.get_port_pos(*outp_id),
+                        ui_state.world.get_port_pos_from_ref(p),
+                    );
+
+                    let diff = (l.1 - l.0); // * ui_state.view.scaling;
+                    let len = (diff.length() / 10f32).max(1f32).min(100f32);
+                    draw_line(&mut draw.lines, l.0, l.1, len as usize);
+                }
+                _ => {}
+            }
+        }
+
+        for n in &ui_state.world.nodes {
+            draw_single_node(
+                &painter,
+                &mut draw.other_shapes,
+                &ui_state.world,
+                n,
+                &ui_state.selection,
+            );
+        }
+
+        painter.extend(draw.lines);
+        painter.extend(draw.other_shapes);
+
+        for n in &mut ui_state.world.nodes {
+            match n.state.render {
+                Some(f) => {
+                    f(ui, &mut n.state.state, n.pos);
+                }
+                None => {}
+            }
+        }
+    });
+
+    ui_state.view_rect = vrect;
+
+    //inner_ui.set_clip_rect(ui_state.view.inverse() * rect);
+    //inner_ui.set_min_size(ui_state.view.inverse().scaling * rect.size());
+    //inner_ui.set_height(height);
 
     //ui.advance_cursor_after_rect(rect);
 
@@ -600,6 +615,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         }
     }*/
 
+    /*
     // Zoom!
     // https://github.com/emilk/egui/discussions/4531
     if let (true, Some(h_pos)) = (
@@ -628,61 +644,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
                 * TSTransform::from_translation(-world_pos.to_vec2());
         }
     }
-
-    let mut draw = DrawingState {
-        lines: vec![],
-        other_shapes: vec![],
-    };
-
-    ui_state.act(ui, &mut response, &mut draw);
-
-    response.context_menu(|ui| {
-        //println!("CTX");
-        if ui.button("Add").clicked() {
-            ui_state.world.create_node(
-                ui_state.view.inverse() * ui.min_rect().min,
-                &add_f32_prototype,
-            );
-        }
-        if ui.button("Const").clicked() {
-            ui_state.world.create_node(
-                ui_state.view.inverse() * ui.min_rect().min,
-                &const_f32_prototype,
-            );
-        }
-    });
-
-    let painter = ui.painter_at(rect);
-
-    for p in &ui_state.world.ports {
-        match &p.connection_kind {
-            PortKind::Input(Some(outp_id)) => {
-                let l = (
-                    ui_state.world.get_port_pos(*outp_id),
-                    ui_state.world.get_port_pos_from_ref(p),
-                );
-
-                let diff = (l.1 - l.0) * ui_state.view.scaling;
-                let len = (diff.length() / 10f32).max(1f32).min(100f32);
-                draw_line(&mut draw.lines, l.0, l.1, len as usize, &ui_state.view);
-            }
-            _ => {}
-        }
-    }
-
-    for n in &ui_state.world.nodes {
-        draw_single_node(
-            &painter,
-            &mut draw.other_shapes,
-            &ui_state.world,
-            n,
-            ui_state.view,
-            &ui_state.selection,
-        );
-    }
-
-    painter.extend(draw.lines);
-    painter.extend(draw.other_shapes);
+    */
 
     // https://github.com/emilk/egui/blob/a1d5145c16aba4d0b11668d496735d07520d0339/crates/egui_demo_lib/src/demo/pan_zoom.rs
     // https://github.com/emilk/egui/blob/f6fa74c66578be17c1a2a80eb33b1704f17a3d5f/crates/egui/src/containers/scene.rs#L214

@@ -17,7 +17,13 @@ use editor_graph::{Node, NodePrototype, Port, PortKind, PortKindPrototype, PortP
 
 use storage::*;
 
-use crate::app::editor_graph::{NodeState, NodeWorld};
+use crate::app::{
+    basic_nodes::{add::add_node_prototype, constant::constant_node_prototype},
+    editor_graph::{NodeState, NodeWorld},
+};
+
+pub mod basic_nodes;
+use basic_nodes::*;
 
 pub struct App {
     // Example stuff:
@@ -192,8 +198,8 @@ impl UIState {
         self.selected_port_pred(pos, |_| true)
     }
 
-    fn selected_port_of_kind(&self, pos: Pos2, kind: PortKindPrototype) -> Option<ID> {
-        self.selected_port_pred(pos, |f| f.port_info.kind == kind)
+    fn selected_port_of_kind(&self, pos: Pos2, input: bool) -> Option<ID> {
+        self.selected_port_pred(pos, |f| f.connection_kind.is_input() == input)
     }
 
     pub fn act(
@@ -515,74 +521,71 @@ fn draw_single_node(
     }
 }
 
-fn render_constant_node(ui: &mut egui::Ui, state: &mut HashMap<String, f32>, pos: Pos2) {
-    let widget = egui::DragValue::new(state.get_mut("val").unwrap());
-    if ui
-        .put(
-            Rect::from_min_size(pos + vec2(0f32, 50f32), vec2(50f32, 80f32)),
-            egui::Button::new("HI"),
-        )
-        .clicked()
-    {
-        println!("CLICKED. YAY!");
-    }
-    //ui.put(Rect::from_min_size(pos, vec2(100f32, 100f32)), widget);
-}
-
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
-    let add_f32_prototype = NodePrototype {
-        name: "Add Float".to_string(),
-        size: egui::vec2(100f32, 200f32),
-        ports: vec![
-            PortPrototype {
-                local_position: egui::vec2(0f32, 50f32),
-                name: "First".to_string(),
-                kind: PortKindPrototype::Input,
-            },
-            PortPrototype {
-                local_position: egui::Vec2 { x: 0f32, y: 100f32 },
-                name: "Second".to_string(),
-                kind: PortKindPrototype::Input,
-            },
-            PortPrototype {
-                local_position: egui::vec2(100f32, 50f32),
-                name: "Out".to_string(),
-                kind: PortKindPrototype::Output(|_, _, _, _| None),
-            },
-        ],
-        state_prototype: NodeState {
-            state: HashMap::new(),
-            render: None,
-        },
-    };
+    let add_f32_prototype = add_node_prototype();
 
-    let const_f32_prototype = NodePrototype {
-        name: "Constant".to_string(),
-        ports: vec![],
-        state_prototype: NodeState {
-            state: HashMap::from([("val".to_string(), 1f32)]),
-            render: Some(render_constant_node),
-        },
-        size: vec2(100f32, 100f32),
-    };
+    let const_f32_prototype = constant_node_prototype();
 
-    let size = ui.available_size();
+    //let size = ui.available_size();
+    //let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
-    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    //egui::Area::new("HI").show(ctx, add_contents);
 
-    let components_layer = LayerId::new(ui.layer_id().order, ui.id().with("Node_Widgets"));
+    let rect = ui.available_rect_before_wrap();
+    let size = rect.size();
+    let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
+    /*
+    let layer_stuff = LayerId::new(egui::Order::Foreground, ui.id().with("LayerStuff"));
+
+    let mut inner_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_size(rect.min, rect.size() / 3f32))
+            .layer_id(layer_stuff),
+    );
+    //inner_ui.set_tran(transform, add_contents)
+    //inner_ui.button("Hi!");
+    */
+
+    /*
+    ui.put(
+        Rect::from_min_size(rect.min, rect.size() / 3f32),
+        egui::Button::new("HELLO"),
+    ); */
+
+    let components_layer = LayerId::new(egui::Order::Foreground, ui.id().with("Node_Widgets"));
+
+    // TODO: Move everything to using inner_ui because it eats clicks and such.
+    // OR: Move everything to individual, own inner_uis!
 
     let mut inner_ui = ui.new_child(
         egui::UiBuilder::new()
             .layer_id(components_layer)
-            .max_rect(Rect::EVERYTHING),
+            .max_rect(Rect::EVERYTHING)
+            .sense(Sense::empty()),
     );
 
     inner_ui.set_clip_rect(ui_state.view.inverse() * rect);
+    inner_ui.set_min_size(ui_state.view.inverse().scaling * rect.size());
+    //inner_ui.set_height(height);
 
     inner_ui
         .ctx()
         .set_transform_layer(components_layer, ui_state.view);
+
+    for n in &mut ui_state.world.nodes {
+        match n.state.render {
+            Some(f) => {
+                f(&mut inner_ui, &mut n.state.state, n.pos);
+            }
+            None => {}
+        }
+    }
+
+    drop(inner_ui);
+
+    //ui.advance_cursor_after_rect(rect);
+
+    //let mut response = inner_ui.response(); //(rect, "HI".into(), Sense::click_and_drag());
 
     /*
     if response.secondary_clicked() {
@@ -634,7 +637,7 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     ui_state.act(ui, &mut response, &mut draw);
 
     response.context_menu(|ui| {
-        ui.label("Add Node");
+        //println!("CTX");
         if ui.button("Add").clicked() {
             ui_state.world.create_node(
                 ui_state.view.inverse() * ui.min_rect().min,
@@ -650,14 +653,6 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
     });
 
     let painter = ui.painter_at(rect);
-
-    /*
-    for l in &ui_state.world.lines {
-        let diff = (l.1 - l.0) * ui_state.view.scaling;
-        let len = (diff.length() / 10f32).max(1f32).min(100f32);
-        draw_line(&mut draw.lines, l.0, l.1, len as usize, &ui_state.view);
-    }
-    */
 
     for p in &ui_state.world.ports {
         match &p.connection_kind {
@@ -686,18 +681,9 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         );
     }
 
-    painter.extend(draw.other_shapes);
     painter.extend(draw.lines);
+    painter.extend(draw.other_shapes);
 
     // https://github.com/emilk/egui/blob/a1d5145c16aba4d0b11668d496735d07520d0339/crates/egui_demo_lib/src/demo/pan_zoom.rs
     // https://github.com/emilk/egui/blob/f6fa74c66578be17c1a2a80eb33b1704f17a3d5f/crates/egui/src/containers/scene.rs#L214
-
-    for n in &mut ui_state.world.nodes {
-        match n.state.render {
-            Some(f) => {
-                f(&mut inner_ui, &mut n.state.state, n.pos);
-            }
-            None => {}
-        }
-    }
 }

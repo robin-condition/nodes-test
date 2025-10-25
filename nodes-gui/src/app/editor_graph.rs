@@ -4,14 +4,20 @@ use egui::Pos2;
 
 use crate::app::storage::{ID, Storage};
 
+#[derive(Clone)]
+pub enum StateValue {
+    Float(f32),
+    Char(char),
+}
+
 type OutputEvaluationFn = fn(
     &NodeWorld,
     &HashMap<String, Option<ID>>,
-    &HashMap<String, f32>,
+    &HashMap<String, StateValue>,
     rpds::HashTrieMap<String, f32>,
 ) -> Option<f32>;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum PortKindPrototype {
     Input,
     Output(OutputEvaluationFn),
@@ -26,7 +32,7 @@ impl PortKindPrototype {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum PortKind {
     Input(Option<ID>),
     Output(OutputEvaluationFn),
@@ -61,8 +67,8 @@ pub struct PortPrototype {
 
 #[derive(Clone)]
 pub struct NodeState {
-    pub state: HashMap<String, f32>,
-    pub render: Option<fn(&mut egui::Ui, &mut HashMap<String, f32>, egui::Pos2) -> ()>,
+    pub state: HashMap<String, StateValue>,
+    pub render: Option<fn(&mut egui::Ui, &mut HashMap<String, StateValue>, egui::Pos2) -> ()>,
 }
 
 // Contains all rendering information for a kind of node.

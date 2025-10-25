@@ -65,7 +65,7 @@ pub struct PortPrototype {
     pub kind: PortKindPrototype,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct NodeState {
     pub state: HashMap<String, StateValue>,
     pub render: Option<fn(&mut egui::Ui, &mut HashMap<String, StateValue>, egui::Pos2) -> ()>,

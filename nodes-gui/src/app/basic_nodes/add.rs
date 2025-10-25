@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
+use egui::{Pos2, UiBuilder};
 use rpds::HashTrieMap;
 
 use crate::app::{
+    basic_nodes::node_tools::{get_input, get_state_char, get_state_char_mut},
     editor_graph::{
         NodePrototype, NodeState, NodeWorld, PortKindPrototype, PortPrototype, StateValue,
     },
@@ -11,7 +13,7 @@ use crate::app::{
 
 pub fn add_node_prototype() -> NodePrototype {
     NodePrototype {
-        name: "Add Float".to_string(),
+        name: "Binary Math".to_string(),
         size: egui::vec2(100f32, 80f32),
         ports: vec![
             PortPrototype {
@@ -31,31 +33,38 @@ pub fn add_node_prototype() -> NodePrototype {
             },
         ],
         state_prototype: NodeState {
-            state: HashMap::new(),
-            render: None,
+            state: HashMap::from([("op".to_string(), StateValue::Char('+'))]),
+            render: Some(add_render),
         },
     }
+}
+
+fn add_render(ui: &mut egui::Ui, state: &mut HashMap<String, StateValue>, pos: Pos2) {
+    let val = get_state_char_mut("op", state).unwrap();
+    egui::containers::ComboBox::from_id_salt("test_box")
+        .width(10f32)
+        .selected_text(format!("{}", *val))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(val, '+', "Add");
+            ui.selectable_value(val, '-', "Sub");
+            ui.selectable_value(val, '*', "Mul");
+        });
 }
 
 fn add_node_eval(
     world: &NodeWorld,
     inputs: &HashMap<String, Option<ID>>,
-    _: &HashMap<String, StateValue>,
+    state: &HashMap<String, StateValue>,
     ctx: HashTrieMap<String, f32>,
 ) -> Option<f32> {
-    let first_f = inputs
-        .get("First")
-        .copied()
-        .flatten()
-        .map(|p| world.evaluate_output_port(p, ctx.clone()))
-        .flatten()
-        .or(ctx.get("First").copied())?;
-    let second_f = inputs
-        .get("Second")
-        .copied()
-        .flatten()
-        .map(|p| world.evaluate_output_port(p, ctx.clone()))
-        .flatten()
-        .or(ctx.get("Second").copied())?;
-    Some(first_f + second_f)
+    let first_f = get_input("A", world, inputs, &ctx)?;
+    let second_f = get_input("B", world, inputs, &ctx)?;
+    let op = get_state_char("op", state)?;
+
+    match op {
+        '+' => Some(first_f + second_f),
+        '-' => Some(first_f - second_f),
+        '*' => Some(first_f * second_f),
+        _ => None,
+    }
 }

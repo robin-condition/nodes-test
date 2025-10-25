@@ -1870,6 +1870,7 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "paste",
  "rpds",
 ]
 

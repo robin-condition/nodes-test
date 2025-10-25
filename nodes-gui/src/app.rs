@@ -1,7 +1,7 @@
 // https://github.com/emilk/eframe_template/blob/main/src/app.rs
 
 use egui::{
-    Align, Color32, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
+    Align, Color32, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, UiBuilder,
     epaint::{CircleShape, PathShape, PathStroke, RectShape, TextShape},
     pos2,
     text::LayoutJob,
@@ -12,11 +12,15 @@ pub mod editor_graph;
 pub mod storage;
 use editor_graph::{Node, Port, PortKind};
 
+use rpds::HashTrieMap;
 use storage::*;
 
 use crate::app::{
-    basic_nodes::{add::add_node_prototype, constant::constant_node_prototype},
-    editor_graph::{NodeState, NodeWorld},
+    basic_nodes::{
+        add::add_node_prototype, constant::constant_node_prototype, exp::exp_prototype,
+        image::done_node,
+    },
+    editor_graph::{NodePrototype, NodeWorld},
 };
 
 pub mod basic_nodes;
@@ -38,9 +42,17 @@ impl Default for App {
             value: 2.7,
             state: UIState {
                 world: Default::default(),
+                add_pos: None,
+                val: None,
                 interacting_mode: InteractingMode::Idle,
-                view_rect: Rect::ZERO,
+                view_rect: Rect::from_min_size(Pos2 { x: 0f32, y: 0f32 }, vec2(200f32, 200f32)),
                 selection: Default::default(),
+                prototypes: vec![
+                    constant_node_prototype(),
+                    add_node_prototype(),
+                    done_node(),
+                    exp_prototype(),
+                ],
             },
         }
     }
@@ -143,9 +155,12 @@ enum PortOrPos {
 
 struct UIState {
     world: NodeWorld,
+    add_pos: Option<Pos2>,
+    val: Option<f32>,
     view_rect: Rect,
     interacting_mode: InteractingMode,
     selection: SelectionState,
+    prototypes: Vec<NodePrototype>,
 }
 
 #[derive(Default)]
@@ -506,10 +521,6 @@ fn draw_single_node(
 }
 
 fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
-    let add_f32_prototype = add_node_prototype();
-
-    let const_f32_prototype = constant_node_prototype();
-
     //let size = ui.available_size();
     //let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
@@ -531,14 +542,26 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         Rect::from_min_size(rect.min, rect.size() / 3f32),
         egui::Button::new("HELLO"),
     ); */
+
+    ui.label(format!("Hello! Value: {:?}", ui_state.val));
+
+    for n in &ui_state.world.nodes {
+        if n.prototype.name == "Out" {
+            let inp = match ui_state.world.ports.get(n.ports[0]).connection_kind {
+                PortKind::Input(i) => i,
+                _ => panic!(),
+            };
+
+            ui_state.val = match inp {
+                Some(op) => ui_state.world.evaluate_output_port(op, HashTrieMap::new()),
+                None => None,
+            };
+        }
+    }
+
     let mut vrect = ui_state.view_rect;
 
-    let scene_screen_rect = ui.available_rect_before_wrap();
-
     egui::containers::Scene::new().show(ui, &mut vrect, |ui| {
-        let screen_to_scene =
-            egui::emath::RectTransform::from_to(scene_screen_rect, ui_state.view_rect);
-
         let mut response = ui.response();
 
         let mut draw = DrawingState {
@@ -555,15 +578,22 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
             button,
         );
 
+        if response.secondary_clicked() {
+            ui_state.add_pos = response.interact_pointer_pos();
+        }
+
         response.context_menu(|ui| {
-            let pos = ui.min_rect().min;
-            let pos = screen_to_scene * pos;
-            //println!("CTX");
-            if ui.button("Add").clicked() {
-                ui_state.world.create_node(pos, &add_f32_prototype);
-            }
-            if ui.button("Const").clicked() {
-                ui_state.world.create_node(pos, &const_f32_prototype);
+            let pos = match ui_state.add_pos {
+                Some(r) => r,
+                None => {
+                    return;
+                }
+            };
+
+            for p in &ui_state.prototypes {
+                if ui.button(&p.name).clicked() {
+                    ui_state.world.create_node(pos, &p);
+                }
             }
         });
 
@@ -598,10 +628,20 @@ fn draw_node(ui: &mut egui::Ui, ui_state: &mut UIState) {
         painter.extend(draw.lines);
         painter.extend(draw.other_shapes);
 
-        for n in &mut ui_state.world.nodes {
+        for (i, n) in ui_state.world.nodes.with_ids_mut() {
             match n.state.render {
                 Some(f) => {
-                    f(ui, &mut n.state.state, n.pos);
+                    let node_rect = Rect::from_min_size(
+                        n.pos + vec2(10f32, 40f32),
+                        n.prototype.size - vec2(40f32, 70f32),
+                    );
+                    ui.scope_builder(
+                        UiBuilder::new().max_rect(node_rect).id_salt(("node", *i)),
+                        |ui| {
+                            f(ui, &mut n.state.state, n.pos);
+                        },
+                    );
+                    //f(ui, &mut n.state.state, n.pos);
                 }
                 None => {}
             }
